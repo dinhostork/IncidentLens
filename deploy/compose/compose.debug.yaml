@@ -1,0 +1,6 @@
+# Adds the debug exporter to every Collector pipeline. Used by `make up DEBUG=1`.
+services:
+  otel-collector:
+    command:
+      - --config=/etc/otelcol/collector.yaml
+      - --config=/etc/otelcol/debug.yaml

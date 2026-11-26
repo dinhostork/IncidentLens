@@ -1,0 +1,15 @@
+# Merged on top of collector.yaml when the stack runs with DEBUG=1.
+# Lists replace lists when configs are merged, so each pipeline repeats clickhouse.
+
+exporters:
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      exporters: [clickhouse, debug]
+    metrics:
+      exporters: [clickhouse, debug]
+    logs:
+      exporters: [clickhouse, debug]

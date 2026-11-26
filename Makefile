@@ -11,12 +11,36 @@ help: ## Show this help
 
 ## Local stack
 
-.PHONY: up down
-up: ## Start the local stack (not available until the compose stack lands, #4)
-	@echo "make up: no compose stack yet, see issue #4" >&2; exit 1
+COMPOSE_FILES := -f deploy/compose/compose.yaml
+ifeq ($(DEBUG),1)
+COMPOSE_FILES += -f deploy/compose/compose.debug.yaml
+endif
+COMPOSE := docker compose $(COMPOSE_FILES)
+CH_QUERY = $(COMPOSE) exec -T clickhouse clickhouse-client --query
 
-down: ## Stop the local stack
-	@echo "make down: no compose stack yet, see issue #4" >&2; exit 1
+.PHONY: up down reset ps logs smoke
+up: ## Start the local stack and wait until it is healthy (DEBUG=1 adds the debug exporter)
+	$(COMPOSE) up -d --wait
+
+down: ## Stop the local stack, keep data
+	$(COMPOSE) down
+
+reset: ## Stop the local stack and delete its volumes
+	$(COMPOSE) down --volumes
+
+ps: ## Show stack status
+	$(COMPOSE) ps
+
+logs: ## Follow stack logs (SERVICE=name for one service)
+	$(COMPOSE) logs -f $(SERVICE)
+
+smoke: ## Send test spans through the Collector and check they reach ClickHouse
+	$(COMPOSE) --profile smoke run --rm telemetrygen
+	@for i in $$(seq 1 30); do \
+	  n=$$($(CH_QUERY) "SELECT count() FROM otel.otel_traces WHERE ServiceName = 'smoke-test' AND Timestamp > now() - INTERVAL 5 MINUTE" 2>/dev/null); \
+	  if [ "$${n:-0}" -gt 0 ]; then echo "smoke: $$n spans in otel.otel_traces"; exit 0; fi; \
+	  sleep 1; \
+	done; echo "smoke: no spans reached otel.otel_traces after 30s" >&2; exit 1
 
 ## Setup
 
