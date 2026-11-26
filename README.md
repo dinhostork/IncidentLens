@@ -48,6 +48,7 @@ The repo includes a small demo system and a set of fault scenarios with known ro
 - [Roadmap](docs/ROADMAP.md)
 - [Architecture](docs/architecture.md)
 - [Decision records](docs/adr/)
+- [Telemetry conventions](docs/telemetry-conventions.md)
 - [Contributing](CONTRIBUTING.md)
 
 ## License
