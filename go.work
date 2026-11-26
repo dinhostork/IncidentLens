@@ -1,0 +1,8 @@
+go 1.23
+
+use (
+	./changes
+	./demo/services/gateway
+	./demo/services/orders
+	./demo/services/payments
+)

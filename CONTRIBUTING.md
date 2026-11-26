@@ -11,7 +11,15 @@ The project is early and the layout is still settling, so check the [roadmap](do
 
 ## Local setup
 
-Not ready yet. It will be a single `make up` once the Phase 0 stack lands. This section will be updated then.
+You need Go 1.23+, [uv](https://docs.astral.sh/uv/) (it fetches Python 3.12 if needed), Node 22 with pnpm (`corepack enable`), [golangci-lint](https://golangci-lint.run/) v2 and Docker Compose.
+
+```sh
+make setup   # Python and web dependencies
+make lint
+make test
+```
+
+`make help` lists the other targets. `make up` will start the local stack once it lands (#4).
 
 ## Decisions
 
