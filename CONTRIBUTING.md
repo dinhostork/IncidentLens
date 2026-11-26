@@ -11,7 +11,7 @@ The project is early and the layout is still settling, so check the [roadmap](do
 
 ## Local setup
 
-You need Go 1.23+, [uv](https://docs.astral.sh/uv/) (it fetches Python 3.12 if needed), Node 22 with pnpm (`corepack enable`), [golangci-lint](https://golangci-lint.run/) v2 and Docker Compose.
+You need Go 1.26+ (required by the OpenTelemetry Go SDK in the demo services), [uv](https://docs.astral.sh/uv/) (it fetches Python 3.12 if needed), Node 22 with pnpm (`corepack enable`), [golangci-lint](https://golangci-lint.run/) v2 and Docker Compose.
 
 ```sh
 make setup   # Python and web dependencies
@@ -19,7 +19,7 @@ make lint
 make test
 ```
 
-`make up` starts the local stack (Collector, ClickHouse, flagd), see [`deploy/README.md`](deploy/README.md). `make help` lists the other targets.
+`make up` builds the demo services and starts the local stack (Collector, ClickHouse, flagd, the demo system), see [`deploy/README.md`](deploy/README.md). `make help` lists the other targets.
 
 ## Decisions
 

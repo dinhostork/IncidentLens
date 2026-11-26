@@ -1,7 +1,8 @@
-go 1.23
+go 1.26.0
 
 use (
 	./changes
+	./demo/internal
 	./demo/services/gateway
 	./demo/services/orders
 	./demo/services/payments
