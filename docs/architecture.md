@@ -104,7 +104,7 @@ Four services behind a gateway, small enough to run on a laptop:
 | `orders` | Go | catalog, payments, Postgres |
 | `payments` | Go | Postgres |
 
-All services are instrumented with OpenTelemetry SDKs and read fault flags from flagd through OpenFeature. A k6 script generates steady traffic with some variation.
+All services are instrumented with OpenTelemetry SDKs following the [telemetry conventions](telemetry-conventions.md), and read fault flags from flagd through OpenFeature. A k6 script generates steady traffic with some variation.
 
 ## Scenarios (`bench/scenarios/`)
 
