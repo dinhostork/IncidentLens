@@ -1,0 +1,114 @@
+name: incidentlens
+
+# Local stack: Collector -> ClickHouse, plus flagd for fault flags.
+# Run from the repo root with `make up`, or:
+#   docker compose -f deploy/compose/compose.yaml up -d --wait
+#
+# The Collector and flagd images have no shell or HTTP client, so their health
+# checks run a static busybox copied into a shared volume by the `probe` service.
+
+services:
+  probe:
+    image: busybox:1.37.0-musl
+    command: ["cp", "/bin/busybox", "/probe/busybox"]
+    volumes:
+      - probe:/probe
+    restart: "no"
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8.48.11
+    environment:
+      CLICKHOUSE_DB: otel
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-incidentlens}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-incidentlens}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ../clickhouse/config.d/low-memory.xml:/etc/clickhouse-server/config.d/low-memory.xml:ro
+    ports:
+      - "127.0.0.1:8123:8123" # HTTP
+      - "127.0.0.1:9000:9000" # native
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    deploy:
+      resources:
+        limits:
+          memory: 1536m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.165.0
+    command: ["--config=/etc/otelcol/collector.yaml"]
+    volumes:
+      - probe:/probe:ro
+      - ../otel:/etc/otelcol:ro
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-incidentlens}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-incidentlens}
+    ports:
+      - "127.0.0.1:4317:4317" # OTLP gRPC
+      - "127.0.0.1:4318:4318" # OTLP HTTP
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    depends_on:
+      probe:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/probe/busybox", "wget", "-qO-", "http://127.0.0.1:13133/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  flagd:
+    image: ghcr.io/open-feature/flagd:v0.18.2
+    command: ["start", "--uri", "file:/etc/flagd/flags.json"]
+    volumes:
+      - probe:/probe:ro
+      - ../flags:/etc/flagd:ro
+    ports:
+      - "127.0.0.1:8013:8013" # flag evaluation (gRPC)
+      - "127.0.0.1:8016:8016" # OFREP (HTTP)
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+    depends_on:
+      probe:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/probe/busybox", "wget", "-qO-", "http://127.0.0.1:8014/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  # Sends a few test spans to the Collector. Used by `make smoke`.
+  telemetrygen:
+    image: ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen:v0.165.1
+    profiles: ["smoke"]
+    command:
+      - traces
+      - --otlp-endpoint=otel-collector:4317
+      - --otlp-insecure
+      - --service=smoke-test
+      - --traces=10
+      - --child-spans=2
+    depends_on:
+      otel-collector:
+        condition: service_healthy
+
+volumes:
+  clickhouse-data:
+  probe:

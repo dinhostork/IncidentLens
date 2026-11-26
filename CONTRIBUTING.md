@@ -19,7 +19,7 @@ make lint
 make test
 ```
 
-`make help` lists the other targets. `make up` will start the local stack once it lands (#4).
+`make up` starts the local stack (Collector, ClickHouse, flagd), see [`deploy/README.md`](deploy/README.md). `make help` lists the other targets.
 
 ## Decisions
 
