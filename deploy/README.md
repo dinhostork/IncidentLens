@@ -1,12 +1,12 @@
 # Local stack
 
-Docker Compose stack for development: an OpenTelemetry Collector that writes to ClickHouse, and flagd for the fault flags used by the demo services.
+Docker Compose stack for development: an OpenTelemetry Collector that writes to ClickHouse, flagd for the fault flags, and the [demo system](../demo/README.md) with its Postgres and Redis.
 
 ```sh
-make up       # start and wait until every service is healthy
-make smoke    # send test spans and check they land in otel.otel_traces
+make up       # build the demo images, start, wait until every service is healthy
+make smoke    # send test spans, run a demo checkout, check both land in otel.otel_traces
 make down     # stop, keep data
-make reset    # stop and delete the ClickHouse volume
+make reset    # stop and delete the ClickHouse and Postgres volumes
 ```
 
 `make up DEBUG=1` adds the Collector's `debug` exporter to every pipeline, so received telemetry is also printed to `make logs SERVICE=otel-collector`.
@@ -21,6 +21,9 @@ make reset    # stop and delete the ClickHouse volume
 | `otel/debug.yaml` | Adds the `debug` exporter |
 | `clickhouse/config.d/low-memory.xml` | Smaller caches, noisy system logs turned off |
 | `flags/flags.json` | flagd flag definitions. Empty until the demo fault flags land. |
+| `postgres/initdb/` | Creates one database and role per demo service on first start |
+
+The demo service images are built from `demo/` (see [`demo/README.md`](../demo/README.md#layout)).
 
 ## Services and ports
 
@@ -31,8 +34,14 @@ All ports are bound to `127.0.0.1`.
 | `otel-collector` | `otel/opentelemetry-collector-contrib:0.165.0` | 4317 OTLP gRPC, 4318 OTLP HTTP | `health_check` extension on 13133 |
 | `clickhouse` | `clickhouse/clickhouse-server:26.8.48.11` (LTS) | 8123 HTTP, 9000 native | `/ping` |
 | `flagd` | `ghcr.io/open-feature/flagd:v0.18.2` | 8013 evaluation (gRPC), 8016 OFREP (HTTP) | `/readyz` on 8014 |
+| `postgres` | `postgres:18.7-alpine` | none | `pg_isready` |
+| `redis` | `redis:8.12.0-alpine` | none | `redis-cli ping` |
+| `gateway` | built from `demo/services/gateway` | 8080 (`GATEWAY_PORT`) | `/healthz` |
+| `catalog`, `orders`, `payments` | built from `demo/services/<name>` | none | `/healthz` |
 
-The Collector and flagd images have no shell or HTTP client. A one-shot `probe` service copies a static busybox into a shared volume, and their health checks run `busybox wget` from there. This keeps the upstream images unmodified.
+The Collector, flagd and Go service images have no shell or HTTP client. A one-shot `probe` service copies a static busybox into a shared volume, and their health checks run `busybox wget` from there. This keeps the upstream images unmodified.
+
+Redis runs without persistence. Postgres keeps its data in the `postgres-data` volume, credentials are in `compose.yaml` and only matter inside the compose network.
 
 Versions are pinned. The ClickHouse exporter's table layout can change between Collector releases (see [ADR 0001](../docs/adr/0001-clickhouse-as-telemetry-store.md)), so check the exporter changelog before bumping it.
 
@@ -44,7 +53,7 @@ Credentials default to `incidentlens` / `incidentlens` and can be overridden wit
 docker compose -f deploy/compose/compose.yaml exec clickhouse clickhouse-client
 ```
 
-Memory: the container is limited to 1.5 GB and ClickHouse caps itself at 75% of that. At idle the whole stack uses about 200 MB.
+Memory: the container is limited to 1.5 GB and ClickHouse caps itself at 75% of that. At idle the whole stack, demo services included, uses about 450 MB.
 
 ### Tables
 
@@ -67,4 +76,4 @@ The TTL comes from `ttl: 72h` in `otel/collector.yaml` and is applied only when 
 
 - `make up` fails on a health check: `make logs SERVICE=<name>`. ClickHouse writes its own logs to `/var/log/clickhouse-server/` inside the container.
 - Nothing shows up in ClickHouse: run with `DEBUG=1` to see whether the Collector receives anything at all.
-- Port already in use: another ClickHouse or Collector is probably running on the host.
+- Port already in use: another ClickHouse or Collector is probably running on the host. For the gateway, set `GATEWAY_PORT`.

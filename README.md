@@ -38,7 +38,7 @@ The repo includes a small demo system and a set of fault scenarios with known ro
 | `engine/` | Reconstruction engine and `incidentlens` CLI | Python |
 | `changes/` | Change events API | Go |
 | `web/` | Replay UI | TypeScript (Next.js) |
-| `demo/` | Demo system used for development and benchmarks | Go, Python |
+| `demo/` | Demo system used for development and benchmarks ([README](demo/README.md)) | Go, Python |
 | `bench/scenarios/` | Fault scenarios with ground truth | YAML |
 | `deploy/` | Docker Compose stack, Collector config | |
 | `docs/` | Roadmap, architecture, decision records | |

@@ -1,7 +1,7 @@
 # Run `make help` for the list of targets.
 
-GO_MODULES := changes demo/services/gateway demo/services/orders demo/services/payments
-PY_PROJECTS := engine
+GO_MODULES := changes demo/internal demo/services/gateway demo/services/orders demo/services/payments
+PY_PROJECTS := engine demo/services/catalog
 
 .DEFAULT_GOAL := help
 
@@ -19,8 +19,8 @@ COMPOSE := docker compose $(COMPOSE_FILES)
 CH_QUERY = $(COMPOSE) exec -T clickhouse clickhouse-client --query
 
 .PHONY: up down reset ps logs smoke
-up: ## Start the local stack and wait until it is healthy (DEBUG=1 adds the debug exporter)
-	$(COMPOSE) up -d --wait
+up: ## Build the demo services, start the stack and wait until it is healthy (DEBUG=1 adds the debug exporter)
+	$(COMPOSE) up -d --build --wait
 
 down: ## Stop the local stack, keep data
 	$(COMPOSE) down
@@ -34,13 +34,14 @@ ps: ## Show stack status
 logs: ## Follow stack logs (SERVICE=name for one service)
 	$(COMPOSE) logs -f $(SERVICE)
 
-smoke: ## Send test spans through the Collector and check they reach ClickHouse
+smoke: ## Check that test spans and a demo checkout flow reach ClickHouse
 	$(COMPOSE) --profile smoke run --rm telemetrygen
 	@for i in $$(seq 1 30); do \
 	  n=$$($(CH_QUERY) "SELECT count() FROM otel.otel_traces WHERE ServiceName = 'smoke-test' AND Timestamp > now() - INTERVAL 5 MINUTE" 2>/dev/null); \
 	  if [ "$${n:-0}" -gt 0 ]; then echo "smoke: $$n spans in otel.otel_traces"; exit 0; fi; \
 	  sleep 1; \
 	done; echo "smoke: no spans reached otel.otel_traces after 30s" >&2; exit 1
+	@COMPOSE="$(COMPOSE)" demo/smoke.sh
 
 ## Setup
 

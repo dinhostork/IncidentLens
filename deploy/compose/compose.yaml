@@ -1,11 +1,36 @@
 name: incidentlens
 
-# Local stack: Collector -> ClickHouse, plus flagd for fault flags.
+# Local stack: Collector -> ClickHouse, flagd for fault flags, and the demo
+# system (gateway, catalog, orders, payments, with Postgres and Redis).
 # Run from the repo root with `make up`, or:
-#   docker compose -f deploy/compose/compose.yaml up -d --wait
+#   docker compose -f deploy/compose/compose.yaml up -d --build --wait
 #
-# The Collector and flagd images have no shell or HTTP client, so their health
-# checks run a static busybox copied into a shared volume by the `probe` service.
+# The Collector, flagd and Go service images have no shell or HTTP client, so
+# their health checks run a static busybox copied into a shared volume by the
+# `probe` service.
+
+# Settings shared by the demo services. See docs/telemetry-conventions.md.
+x-demo-env: &demo-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=demo,service.namespace=shop
+  OTEL_METRIC_EXPORT_INTERVAL: "10000"
+
+x-demo-service: &demo-service
+  restart: unless-stopped
+  # Services get 5s to finish requests and 3s to flush telemetry on SIGTERM.
+  stop_grace_period: 15s
+  volumes:
+    - probe:/probe:ro
+  healthcheck:
+    test: ["CMD", "/probe/busybox", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+    start_period: 10s
+  deploy:
+    resources:
+      limits:
+        memory: 128m
 
 services:
   probe:
@@ -94,6 +119,131 @@ services:
       retries: 20
       start_period: 5s
 
+  postgres:
+    image: postgres:18.7-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ../postgres/initdb:/docker-entrypoint-initdb.d:ro
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:8.12.0-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    deploy:
+      resources:
+        limits:
+          memory: 96m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  gateway:
+    <<: *demo-service
+    build:
+      context: ../../demo
+      dockerfile: services/gateway/Dockerfile
+    image: incidentlens-demo/gateway:dev
+    environment:
+      <<: *demo-env
+      OTEL_SERVICE_NAME: gateway
+      SERVICE_VERSION: ${GATEWAY_VERSION:-1.0.0}
+      CATALOG_URL: http://catalog:8080
+      ORDERS_URL: http://orders:8080
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      probe:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+      catalog:
+        condition: service_healthy
+      orders:
+        condition: service_healthy
+
+  catalog:
+    <<: *demo-service
+    build:
+      context: ../../demo
+      dockerfile: services/catalog/Dockerfile
+    image: incidentlens-demo/catalog:dev
+    environment:
+      <<: *demo-env
+      OTEL_SERVICE_NAME: catalog
+      SERVICE_VERSION: ${CATALOG_VERSION:-1.0.0}
+      DATABASE_URL: postgres://catalog:catalog@postgres:5432/catalog
+      REDIS_URL: redis://redis:6379/0
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    depends_on:
+      probe:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  orders:
+    <<: *demo-service
+    build:
+      context: ../../demo
+      dockerfile: services/orders/Dockerfile
+    image: incidentlens-demo/orders:dev
+    environment:
+      <<: *demo-env
+      OTEL_SERVICE_NAME: orders
+      SERVICE_VERSION: ${ORDERS_VERSION:-1.0.0}
+      DATABASE_URL: postgres://orders:orders@postgres:5432/orders
+      CATALOG_URL: http://catalog:8080
+      PAYMENTS_URL: http://payments:8080
+    depends_on:
+      probe:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      catalog:
+        condition: service_healthy
+      payments:
+        condition: service_healthy
+
+  payments:
+    <<: *demo-service
+    build:
+      context: ../../demo
+      dockerfile: services/payments/Dockerfile
+    image: incidentlens-demo/payments:dev
+    environment:
+      <<: *demo-env
+      OTEL_SERVICE_NAME: payments
+      SERVICE_VERSION: ${PAYMENTS_VERSION:-1.0.0}
+      DATABASE_URL: postgres://payments:payments@postgres:5432/payments
+    depends_on:
+      probe:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
   # Sends a few test spans to the Collector. Used by `make smoke`.
   telemetrygen:
     image: ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen:v0.165.1
@@ -111,4 +261,5 @@ services:
 
 volumes:
   clickhouse-data:
+  postgres-data:
   probe:
