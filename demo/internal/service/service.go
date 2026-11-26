@@ -39,7 +39,9 @@ func run(setup Setup) (err error) {
 		if err != nil {
 			slog.Error("exiting", "error", err.Error())
 		}
-		sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// See httpx.ShutdownTimeout: both together stay under the 15s
+		// stop_grace_period set in compose.
+		sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		if serr := shutdown(sctx); serr != nil {
 			fmt.Fprintln(os.Stderr, "telemetry shutdown:", serr)

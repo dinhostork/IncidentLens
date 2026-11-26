@@ -10,6 +10,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -45,11 +49,23 @@ type DB struct {
 	pool *pgxpool.Pool
 }
 
-// Open creates a pool for dsn and checks that the database answers.
+// DefaultPoolMax is the pool size when DB_POOL_MAX is not set.
+const DefaultPoolMax = 10
+
+// Open creates a pool for dsn and checks that the database answers. The pool
+// size comes from DB_POOL_MAX (default 10), the same variable catalog reads.
 func Open(ctx context.Context, dsn string, hook fault.Hook) (*DB, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse dsn: %w", err)
+	}
+	cfg.MaxConns = DefaultPoolMax
+	if v := os.Getenv("DB_POOL_MAX"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return nil, fmt.Errorf("DB_POOL_MAX: want a positive integer, got %q", v)
+		}
+		cfg.MaxConns = int32(n)
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -124,6 +140,14 @@ func (c conn) Exec(ctx context.Context, sql string, args ...any) (pgconn.Command
 }
 
 func (c conn) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	rows, err := c.query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (c conn) query(ctx context.Context, sql string, args ...any) (*tracedRows, error) {
 	ctx, span := c.in.start(ctx, sql)
 	if err := c.in.before(ctx, sql); err != nil {
 		c.in.end(span, err)
@@ -138,7 +162,7 @@ func (c conn) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, err
 }
 
 func (c conn) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	rows, err := c.Query(ctx, sql, args...)
+	rows, err := c.query(ctx, sql, args...)
 	return &row{rows: rows, err: err}
 }
 
@@ -184,19 +208,36 @@ func (in *instr) run(ctx context.Context, sql string, fn func(context.Context) e
 func (in *instr) end(span trace.Span, err error) {
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		var pgErr *pgconn.PgError
-		switch {
-		case errors.As(err, &pgErr):
-			span.SetAttributes(semconv.DBResponseStatusCode(pgErr.Code), semconv.ErrorTypeKey.String(pgErr.Code))
-		case errors.Is(err, context.DeadlineExceeded):
-			span.SetAttributes(semconv.ErrorTypeKey.String("timeout"))
-		case errors.Is(err, context.Canceled):
-			span.SetAttributes(semconv.ErrorTypeKey.String("canceled"))
-		default:
-			span.SetAttributes(semconv.ErrorTypeKey.String(fmt.Sprintf("%T", err)))
+		if errors.As(err, &pgErr) {
+			span.SetAttributes(semconv.DBResponseStatusCode(pgErr.Code))
 		}
+		span.SetAttributes(semconv.ErrorTypeKey.String(errorType(err)))
 		span.SetStatus(codes.Error, err.Error())
 	}
 	span.End()
+}
+
+// errorType returns a low-cardinality error.type: the SQLSTATE for errors
+// reported by Postgres, a fixed name for the common client-side failures, and
+// "_OTHER" otherwise, as semantic conventions suggest.
+func errorType(err error) string {
+	var (
+		pgErr      *pgconn.PgError
+		connectErr *pgconn.ConnectError
+		netErr     net.Error
+	)
+	switch {
+	case errors.As(err, &pgErr):
+		return pgErr.Code
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.As(err, &connectErr), errors.As(err, &netErr),
+		errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return "connection_error"
+	}
+	return "_OTHER"
 }
 
 // tracedRows ends the span when the rows are closed.
@@ -206,14 +247,23 @@ type tracedRows struct {
 	end  func(error)
 }
 
-func (r *tracedRows) Close() {
+func (r *tracedRows) Close() { r.closeWith(nil) }
+
+// closeWith closes the rows and ends the span with err, or with the rows'
+// own error if err is nil.
+func (r *tracedRows) closeWith(err error) {
 	r.Rows.Close()
-	r.once.Do(func() { r.end(r.Err()) })
+	r.once.Do(func() {
+		if err == nil {
+			err = r.Err()
+		}
+		r.end(err)
+	})
 }
 
 // row mirrors pgx's QueryRow semantics on top of tracedRows.
 type row struct {
-	rows pgx.Rows
+	rows *tracedRows
 	err  error
 }
 
@@ -229,6 +279,8 @@ func (r *row) Scan(dest ...any) error {
 		return pgx.ErrNoRows
 	}
 	if err := r.rows.Scan(dest...); err != nil {
+		// The query worked but the handler will fail; say so on the span.
+		r.rows.closeWith(err)
 		return err
 	}
 	r.rows.Close()

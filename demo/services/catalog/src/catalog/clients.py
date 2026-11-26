@@ -7,6 +7,8 @@ server.address. A Postgres span starts before a connection is taken from the
 pool, so pool waits count as time spent calling Postgres.
 """
 
+import asyncio
+import os
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -49,6 +51,12 @@ async def _client_span(name: str, attrs: dict[str, Any], hook: Hook, point: Poin
         try:
             await hook.before(point)
             yield span
+        except asyncio.CancelledError:
+            # Not an Exception subclass. Record it like the Go side does, then
+            # let the cancellation continue.
+            span.set_attribute(error_attributes.ERROR_TYPE, "canceled")
+            span.set_status(Status(StatusCode.ERROR, "canceled"))
+            raise
         except Exception as exc:
             span.set_attribute(error_attributes.ERROR_TYPE, _error_type(exc))
             if isinstance(exc, asyncpg.PostgresError) and getattr(exc, "sqlstate", None):
@@ -74,6 +82,18 @@ def _summarize(query: str) -> tuple[str, str]:
             if i < len(words):
                 return op, words[i].split("(")[0].rstrip(",;")
     return op, ""
+
+
+DEFAULT_POOL_MAX = 10
+
+
+def pool_max() -> int:
+    raw = os.environ.get("DB_POOL_MAX", "")
+    if not raw:
+        return DEFAULT_POOL_MAX
+    if not raw.isdigit() or int(raw) < 1:
+        raise ValueError(f"DB_POOL_MAX: want a positive integer, got {raw!r}")
+    return int(raw)
 
 
 class Postgres:
@@ -110,10 +130,10 @@ class Postgres:
         )
 
     @classmethod
-    async def connect(
-        cls, dsn: str, hook: Hook, min_size: int = 2, max_size: int = 10
-    ) -> "Postgres":
-        pool = await asyncpg.create_pool(dsn, min_size=min_size, max_size=max_size)
+    async def connect(cls, dsn: str, hook: Hook) -> "Postgres":
+        """Open a pool sized by DB_POOL_MAX (default 10), like the Go services."""
+        max_size = pool_max()
+        pool = await asyncpg.create_pool(dsn, min_size=min(2, max_size), max_size=max_size)
         return cls(pool, dsn, hook)
 
     def _observe_count(self, pool_name: str):

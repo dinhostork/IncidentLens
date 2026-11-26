@@ -55,6 +55,9 @@ def main() -> None:
             port=int(os.environ.get("PORT", "8080")),
             log_config=None,
             access_log=False,
+            # Leaves time for the telemetry flush within compose's
+            # stop_grace_period, as in the Go services.
+            timeout_graceful_shutdown=5,
         )
     finally:
         shutdown()

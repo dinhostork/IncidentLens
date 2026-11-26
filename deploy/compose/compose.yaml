@@ -17,6 +17,8 @@ x-demo-env: &demo-env
 
 x-demo-service: &demo-service
   restart: unless-stopped
+  # Services get 5s to finish requests and 3s to flush telemetry on SIGTERM.
+  stop_grace_period: 15s
   volumes:
     - probe:/probe:ro
   healthcheck:
@@ -208,7 +210,7 @@ services:
       <<: *demo-env
       OTEL_SERVICE_NAME: orders
       SERVICE_VERSION: ${ORDERS_VERSION:-1.0.0}
-      DATABASE_URL: postgres://orders:orders@postgres:5432/orders?pool_max_conns=10
+      DATABASE_URL: postgres://orders:orders@postgres:5432/orders
       CATALOG_URL: http://catalog:8080
       PAYMENTS_URL: http://payments:8080
     depends_on:
@@ -233,7 +235,7 @@ services:
       <<: *demo-env
       OTEL_SERVICE_NAME: payments
       SERVICE_VERSION: ${PAYMENTS_VERSION:-1.0.0}
-      DATABASE_URL: postgres://payments:payments@postgres:5432/payments?pool_max_conns=10
+      DATABASE_URL: postgres://payments:payments@postgres:5432/payments
     depends_on:
       probe:
         condition: service_completed_successfully

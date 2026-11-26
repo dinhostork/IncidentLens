@@ -44,15 +44,16 @@ def test_unknown_product_is_404():
     assert "99" in r.json()["error"]
 
 
-def test_invalid_id_is_422():
-    assert client(FakeStore(PRODUCTS)).get("/products/abc").status_code == 422
+@pytest.mark.parametrize("pid", ["abc", "0", "-1", str(2**63)])
+def test_invalid_id_is_422(pid):
+    assert client(FakeStore(PRODUCTS)).get(f"/products/{pid}").status_code == 422
 
 
 @pytest.mark.parametrize("path", ["/products", "/products/1"])
 def test_store_failure_is_500(path):
     r = client(FakeStore(PRODUCTS, fail=True)).get(path)
     assert r.status_code == 500
-    assert "postgres down" in r.json()["error"]
+    assert "postgres" not in r.text, "internal error details leaked into the response"
 
 
 def test_healthz():

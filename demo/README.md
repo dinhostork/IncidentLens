@@ -46,7 +46,7 @@ Everything goes through the gateway. The flow is browse, add to cart, check out.
 | `POST /api/carts` | orders `POST /carts` | returns the new cart with its `id` |
 | `GET /api/carts/{id}` | orders `GET /carts/{id}` | |
 | `POST /api/carts/{id}/items` | orders `POST /carts/{id}/items` | body `{"product_id": 7, "quantity": 2}`, orders looks up the price in catalog |
-| `POST /api/carts/{id}/checkout` | orders `POST /carts/{id}/checkout` | orders creates the order, charges it through payments `POST /payments`, then closes the cart |
+| `POST /api/carts/{id}/checkout` | orders `POST /carts/{id}/checkout` | orders claims the cart, creates the order, charges it through payments `POST /payments`, then closes the cart |
 
 ```sh
 curl -s localhost:8080/api/products/7
@@ -55,7 +55,21 @@ curl -s -X POST -d '{"product_id":7,"quantity":2}' localhost:8080/api/carts/$car
 curl -s -X POST localhost:8080/api/carts/$cart/checkout
 ```
 
-Errors keep their meaning across hops: a 4xx from a callee is passed back unchanged, anything else (5xx, timeout, connection refused) becomes a 502. Timeouts on outbound calls are 2s to catalog, 3s to payments and 5s from the gateway to orders.
+Errors keep their meaning across hops: a 4xx from a callee is passed back unchanged, anything else (5xx, timeout, connection refused) becomes a 502. 4xx responses carry a message (`cart is empty`); 5xx responses only carry the status text, and the cause goes to the error log and the span. Timeouts on outbound calls are 2s to catalog, 3s to payments and 5s from the gateway to orders.
+
+### Checkout
+
+A cart is `open`, then `checking_out` while a checkout runs, then `checked_out`. The checkout claims the cart with a conditional update, so two concurrent checkouts of one cart cannot both charge it, and items can only be added to an `open` cart.
+
+Once claimed, the checkout runs to the end on its own 8s deadline even if the caller gives up, because payments may already have charged. How it ends:
+
+| What happened | Order | Cart | Response |
+|---|---|---|---|
+| Payment captured | `paid` | `checked_out` | 201 |
+| payments answered with an error | `payment_failed` | `open` again | 502, or the 4xx |
+| payments did not answer (timeout, connection error) | stays `pending` | stays `checking_out` | 502 |
+
+The last case is deliberate: nobody knows whether the charge went through, so the data says so instead of guessing.
 
 catalog reads through a Redis cache (30s for the list, 60s per product). If Redis fails, reads fall back to Postgres and a warning is logged, so a cache outage shows up as extra Postgres load and latency rather than errors.
 
@@ -68,7 +82,10 @@ Every service follows [docs/telemetry-conventions.md](../docs/telemetry-conventi
 - HTTP client spans on every call between services.
 - Database client spans with `db.system.name`, `db.namespace`, `server.address` and `db.query.text`. These are written by hand (`internal/pg`, `catalog/clients.py`) rather than taken from the pgx, asyncpg or redis instrumentations, so that the attributes are the same in both languages and the fault hook runs inside the span. A Postgres span starts before a connection is taken from the pool, so pool waits count as time spent calling Postgres.
 - Metrics: HTTP server and client duration histograms, and `db.client.connection.count` / `db.client.connection.max` for each Postgres pool. Exported every 10s.
-- Logs: request failures at error level with the trace and span IDs of the request, cache failures at warning level, and one info record per placed order and captured payment.
+- Logs: request failures at error level with the trace and span IDs of the request, cache failures at warning level, and one info record per placed order and captured payment. The record body names the failure without variable parts (`call to payments failed`, `database query failed`, `product lookup failed`) and the error itself is an attribute, so log templates separate kinds of failure.
+- `error.type` on database spans is the SQLSTATE when Postgres reported the error, otherwise one of `timeout`, `canceled`, `connection_error` or `_OTHER`.
+
+Each Postgres pool holds up to `DB_POOL_MAX` connections (default 10), in both languages.
 
 ### Simulating a deploy
 

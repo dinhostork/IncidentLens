@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -50,7 +51,7 @@ func TestClientRunsHook(t *testing.T) {
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("server got %d calls, want 1", n)
 	}
-	want := fault.Point{Kind: fault.Outbound, Dependency: "payments", Operation: "POST /payments"}
+	want := fault.Point{Kind: fault.Outbound, Dependency: "payments", Operation: "POST"}
 	if got := hook.seen[len(hook.seen)-1]; got != want {
 		t.Fatalf("hook saw %+v, want %+v", got, want)
 	}
@@ -96,5 +97,38 @@ func TestMuxRunsHook(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if w.Code != http.StatusNoContent || len(hook.seen) != 1 {
 		t.Fatalf("healthz: status %d, hook calls %d", w.Code, len(hook.seen))
+	}
+}
+
+func TestStatusErrorKeepsFullBody(t *testing.T) {
+	long := `{"error":"` + strings.Repeat("x", 2000) + `"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(long))
+	}))
+	defer srv.Close()
+
+	err := NewClient("orders", srv.URL, time.Second, fault.Nop{}).Do(context.Background(), http.MethodGet, "/", nil, nil)
+	var se *StatusError
+	if !errors.As(err, &se) || se.Body != long {
+		t.Fatalf("body not kept in full: %v", err)
+	}
+	if n := len(se.Error()); n > 300 {
+		t.Fatalf("error message is %d bytes, want it truncated", n)
+	}
+}
+
+func TestServerErrorHidesDetails(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	Fail(w, r, http.StatusBadGateway, errors.New("dial tcp 10.0.0.7:8080: connection refused"))
+	if w.Code != http.StatusBadGateway || strings.Contains(w.Body.String(), "10.0.0.7") {
+		t.Fatalf("got %d %s", w.Code, w.Body)
+	}
+
+	w = httptest.NewRecorder()
+	Fail(w, r, http.StatusNotFound, errors.New("cart not found"))
+	if !strings.Contains(w.Body.String(), "cart not found") {
+		t.Fatalf("4xx message lost: %s", w.Body)
 	}
 }

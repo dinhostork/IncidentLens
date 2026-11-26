@@ -41,7 +41,7 @@ func (m *Mux) HandleFunc(pattern string, h http.HandlerFunc) {
 	m.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 		p := fault.Point{Kind: fault.Inbound, Operation: r.Pattern}
 		if err := m.hook.Before(r.Context(), p); err != nil {
-			Fail(w, r, http.StatusInternalServerError, err)
+			ServerError(w, r, http.StatusInternalServerError, "handler failed", err)
 			return
 		}
 		h(w, r)
@@ -65,6 +65,11 @@ func (m *Mux) Handler() http.Handler {
 	)
 }
 
+// ShutdownTimeout bounds how long in-flight requests get after SIGTERM.
+// Together with the telemetry flush in package service it has to stay under
+// the container's stop grace period, or the last spans are lost.
+const ShutdownTimeout = 5 * time.Second
+
 // ListenAndServe serves h on addr until SIGINT or SIGTERM, then shuts down
 // gracefully.
 func ListenAndServe(ctx context.Context, addr string, h http.Handler) error {
@@ -75,6 +80,7 @@ func ListenAndServe(ctx context.Context, addr string, h http.Handler) error {
 		Addr:              addr,
 		Handler:           h,
 		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       90 * time.Second,
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
@@ -85,7 +91,7 @@ func ListenAndServe(ctx context.Context, addr string, h http.Handler) error {
 		return err
 	case <-ctx.Done():
 	}
-	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ShutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return err

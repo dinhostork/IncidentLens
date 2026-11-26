@@ -44,7 +44,7 @@ func forward(c *httpx.Client, method, path string, status int) http.HandlerFunc 
 				_, _ = io.WriteString(w, se.Body)
 				return
 			}
-			httpx.Fail(w, r, httpx.Upstream(err), err)
+			httpx.ServerError(w, r, httpx.Upstream(err), "call to "+c.Dependency()+" failed", err)
 			return
 		}
 		httpx.WriteJSON(w, status, out)

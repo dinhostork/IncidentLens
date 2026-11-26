@@ -26,9 +26,11 @@ func setup(ctx context.Context, hook fault.Hook) (http.Handler, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := db.Exec(ctx, schema); err != nil {
-		db.Close()
-		return nil, nil, err
+	for _, stmt := range schema {
+		if _, err := db.Exec(ctx, stmt); err != nil {
+			db.Close()
+			return nil, nil, err
+		}
 	}
 	s := &server{
 		db:       db,

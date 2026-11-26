@@ -35,12 +35,19 @@ type payment struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-func (req paymentRequest) validate() error {
-	switch {
-	case req.OrderID == "":
+// validate checks req and puts OrderID in canonical form. uuid.Parse accepts
+// forms Postgres rejects (urn:uuid:...), so only the canonical string is
+// sent to the database.
+func (req *paymentRequest) validate() error {
+	if req.OrderID == "" {
 		return errors.New("order_id is required")
-	case uuid.Validate(req.OrderID) != nil:
+	}
+	u, err := uuid.Parse(req.OrderID)
+	if err != nil {
 		return errors.New("order_id is not a UUID")
+	}
+	req.OrderID = u.String()
+	switch {
 	case req.AmountCents <= 0:
 		return errors.New("amount_cents must be positive")
 	case req.Currency != "USD":
@@ -51,7 +58,7 @@ func (req paymentRequest) validate() error {
 
 func (s *server) createPayment(w http.ResponseWriter, r *http.Request) {
 	var req paymentRequest
-	if err := httpx.ReadJSON(r, &req); err != nil {
+	if err := httpx.ReadJSON(w, r, &req); err != nil {
 		httpx.Fail(w, r, http.StatusBadRequest, err)
 		return
 	}
@@ -66,7 +73,7 @@ func (s *server) createPayment(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, r, http.StatusConflict, errors.New("order already paid"))
 		return
 	case err != nil:
-		httpx.Fail(w, r, http.StatusInternalServerError, err)
+		httpx.ServerError(w, r, http.StatusInternalServerError, "database query failed", err)
 		return
 	}
 	slog.InfoContext(r.Context(), "payment captured", "payment.id", p.ID, "order.id", p.OrderID, "amount_cents", p.AmountCents)
@@ -85,21 +92,22 @@ func (s *server) insert(ctx context.Context, req paymentRequest) (payment, error
 }
 
 func (s *server) getPayment(w http.ResponseWriter, r *http.Request) {
-	if uuid.Validate(r.PathValue("id")) != nil {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
 		httpx.Fail(w, r, http.StatusNotFound, errors.New("payment not found"))
 		return
 	}
 	var p payment
-	err := s.db.QueryRow(r.Context(),
+	err = s.db.QueryRow(r.Context(),
 		`SELECT id, order_id, amount_cents, currency, status, created_at FROM payments WHERE id = $1`,
-		r.PathValue("id"),
+		id.String(),
 	).Scan(&p.ID, &p.OrderID, &p.AmountCents, &p.Currency, &p.Status, &p.CreatedAt)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Fail(w, r, http.StatusNotFound, errors.New("payment not found"))
 		return
 	case err != nil:
-		httpx.Fail(w, r, http.StatusInternalServerError, err)
+		httpx.ServerError(w, r, http.StatusInternalServerError, "database query failed", err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, p)
