@@ -33,6 +33,8 @@ make up      # builds the images, starts everything, waits for health checks
 make smoke   # runs a checkout through the gateway and checks the spans in ClickHouse
 ```
 
+Once the gateway is healthy, the `loadgen` service sends about 20 requests per second through it, a mix of browsing, carts and checkouts that rises and falls over an hour. See [`loadgen/README.md`](loadgen/README.md) for the mix and how to change the rate.
+
 The gateway listens on `127.0.0.1:8080` (`GATEWAY_PORT` to change it). The other services are only reachable inside the compose network.
 
 ## API
@@ -165,7 +167,7 @@ The providers run flagd's in-process resolver: they sync the flag definitions fr
 | `faults.py` | Turns faults on and off (`make fault`) |
 | `services/<name>/` | One directory per service, each with its own Dockerfile. Go services are separate modules that use `internal/` through a `replace` directive. |
 | `smoke.sh` | End-to-end check used by `make smoke` |
-| `loadgen/` | k6 load generator (not there yet) |
+| `loadgen/` | k6 load generator for baseline traffic ([README](loadgen/README.md)) |
 
 The Dockerfiles use `demo/` as their build context so that the Go services can copy `internal/`.
 

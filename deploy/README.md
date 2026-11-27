@@ -1,6 +1,6 @@
 # Local stack
 
-Docker Compose stack for development: an OpenTelemetry Collector that writes to ClickHouse, flagd for the fault flags, and the [demo system](../demo/README.md) with its Postgres and Redis.
+Docker Compose stack for development: an OpenTelemetry Collector that writes to ClickHouse, flagd for the fault flags, the [demo system](../demo/README.md) with its Postgres and Redis, and a k6 [load generator](../demo/loadgen/README.md) that keeps traffic on it.
 
 ```sh
 make up       # build the demo images, start, wait until every service is healthy
@@ -41,6 +41,7 @@ All ports are bound to `127.0.0.1`.
 | `redis` | `redis:8.12.0-alpine` | none | `redis-cli ping` |
 | `gateway` | built from `demo/services/gateway` | 8080 (`GATEWAY_PORT`) | `/healthz` |
 | `catalog`, `orders`, `payments` | built from `demo/services/<name>` | none | `/healthz` |
+| `loadgen` | `grafana/k6:2.4.0`, runs `demo/loadgen/script.js` | none | none. Starts after the gateway is healthy, `LOADGEN_RPS` sets the rate (default 20, `0` for none). |
 
 The Collector, flagd and Go service images have no shell or HTTP client. A one-shot `probe` service copies a static busybox into a shared volume, and their health checks run `busybox wget` from there. This keeps the upstream images unmodified.
 
@@ -56,7 +57,7 @@ Credentials default to `incidentlens` / `incidentlens` and can be overridden wit
 docker compose -f deploy/compose/compose.yaml exec clickhouse clickhouse-client
 ```
 
-Memory: the container is limited to 1.5 GB and ClickHouse caps itself at 75% of that. At idle the whole stack, demo services included, uses about 450 MB.
+Memory: the container is limited to 1.5 GB and ClickHouse caps itself at 75% of that. With the load generator at its default rate, the whole stack uses about 650 MB.
 
 ### Tables
 
