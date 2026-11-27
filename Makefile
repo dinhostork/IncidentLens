@@ -35,7 +35,7 @@ ps: ## Show stack status
 logs: ## Follow stack logs (SERVICE=name for one service)
 	$(COMPOSE) logs -f $(SERVICE)
 
-smoke: ## Check that test spans and a demo checkout flow reach ClickHouse and that the changes table exists
+smoke: ## Check that test spans and a demo checkout flow reach ClickHouse and that the changes API stores events
 	$(COMPOSE) --profile smoke run --rm telemetrygen
 	@for i in $$(seq 1 30); do \
 	  n=$$($(CH_QUERY) "SELECT count() FROM otel.otel_traces WHERE ServiceName = 'smoke-test' AND Timestamp > now() - INTERVAL 5 MINUTE" 2>/dev/null); \
@@ -46,6 +46,7 @@ smoke: ## Check that test spans and a demo checkout flow reach ClickHouse and th
 	  echo "smoke: incidentlens.changes exists"; \
 	else echo "smoke: incidentlens.changes is missing" >&2; exit 1; fi
 	@COMPOSE="$(COMPOSE)" demo/smoke.sh
+	@changes/smoke.sh
 
 ## Faults
 
@@ -91,7 +92,7 @@ lint-web: ## eslint and type check
 
 ## Test
 
-.PHONY: test test-go test-py test-loadgen test-web
+.PHONY: test test-go test-py test-loadgen test-web test-clickhouse
 test: test-go test-py test-loadgen test-web ## Run all tests
 
 test-go: ## go test on every Go module
@@ -105,6 +106,9 @@ test-loadgen: ## Tests for the load generator's rate model (Node)
 
 test-web: ## Production build of the web app (no unit tests yet)
 	cd web && pnpm build
+
+test-clickhouse: ## Changes API store tests against the stack's ClickHouse (needs make up, not part of make test)
+	cd changes && go test -tags clickhouse -count=1 ./clickhouse/
 
 ## Format
 

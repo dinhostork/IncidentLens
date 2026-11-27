@@ -29,7 +29,9 @@ Stock OpenTelemetry Collector (contrib distribution) with the ClickHouse exporte
 
 ### Changes API (`changes/`, Go)
 
-Small HTTP service that records things that changed: deploys, config changes, feature flag flips, manual notes. It writes to the `incidentlens.changes` table in ClickHouse, in a database separate from the exporter's.
+Small HTTP service that records things that changed: deploys, config changes, feature flag flips, manual notes. It writes to the `incidentlens.changes` table in ClickHouse, in a database separate from the exporter's, and lists events by time window. The engine reads the table directly and does not need the service running.
+
+The service sends no telemetry of its own. Pointed at the same Collector as the demo, it would show up as one more service in every reconstruction.
 
 The event format is the JSON Schema in [`changes/schema/change.schema.json`](../changes/schema/change.schema.json), described with examples in [`changes/README.md`](../changes/README.md). `kind` is one of `deploy`, `config`, `flag`, `note`. Format, IDs and table layout are in [ADR 0005](adr/0005-change-events.md).
 

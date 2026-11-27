@@ -1,10 +1,10 @@
 # Local stack
 
-Docker Compose stack for development: an OpenTelemetry Collector that writes to ClickHouse, flagd for the fault flags, the [demo system](../demo/README.md) with its Postgres and Redis, and a k6 [load generator](../demo/loadgen/README.md) that keeps traffic on it.
+Docker Compose stack for development: an OpenTelemetry Collector that writes to ClickHouse, the [change events API](../changes/README.md), flagd for the fault flags, the [demo system](../demo/README.md) with its Postgres and Redis, and a k6 [load generator](../demo/loadgen/README.md) that keeps traffic on it.
 
 ```sh
 make up       # build the demo images, start, wait until every service is healthy
-make smoke    # send test spans, run a demo checkout, check both land in otel.otel_traces and the changes table exists
+make smoke    # send test spans, run a demo checkout, check both land in otel.otel_traces, post a change event
 make down     # stop, keep data
 make reset    # stop and delete the ClickHouse and Postgres volumes
 make fault SET="payments.latency_ms.postgres=800"   # turn a demo fault on, see demo/README.md
@@ -37,7 +37,8 @@ All ports are bound to `127.0.0.1`.
 |---|---|---|---|
 | `otel-collector` | `otel/opentelemetry-collector-contrib:0.165.0` | 4317 OTLP gRPC, 4318 OTLP HTTP | `health_check` extension on 13133 |
 | `clickhouse` | `clickhouse/clickhouse-server:26.8.48.11` (LTS) | 8123 HTTP, 9000 native | `/ping` |
-| `clickhouse-init` | same as `clickhouse` | none | none. Runs `clickhouse/init/*.sql` with `clickhouse-client` and exits. The Collector waits for it. |
+| `clickhouse-init` | same as `clickhouse` | none | none. Runs `clickhouse/init/*.sql` with `clickhouse-client` and exits. The changes API waits for it. |
+| `changes` | built from `changes/` | 8090 (`CHANGES_PORT`) | `/healthz`. The [change events API](../changes/README.md). `CHANGES_TOKEN` turns on auth. |
 | `flagd` | `ghcr.io/open-feature/flagd:v0.18.2` | 8013 evaluation (gRPC), 8016 OFREP (HTTP). The demo services use the sync service on 8015 inside the compose network. | `/readyz` on 8014 |
 | `postgres` | `postgres:18.7-alpine` | none | `pg_isready` |
 | `redis` | `redis:8.12.0-alpine` | none | `redis-cli ping` |
