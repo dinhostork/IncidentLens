@@ -5,7 +5,9 @@ Reconstruct production incidents from telemetry and change events.
 
 Pick a time window and IncidentLens builds a timeline of what happened, shows how the failure spread across services and ranks the most likely causes. Every claim in the output points back to the span, log line or change event it came from, so anyone can check it.
 
-> **Status:** early development. Nothing runs yet. See the [roadmap](docs/ROADMAP.md) for what is being built and in which order.
+> **Status:** early development. The lab runs, the analysis does not exist yet.
+>
+> `make up` starts the local stack (Collector, ClickHouse, flagd), the [demo shop](demo/README.md) and a load generator. Faults are switched on with `make fault`, and the five [benchmark scenarios](bench/README.md) each produce a visible change in latency or errors on their target service. The engine, the change events API and the UI are still empty skeletons. See the [roadmap](docs/ROADMAP.md) for what comes next.
 
 ## Why
 
