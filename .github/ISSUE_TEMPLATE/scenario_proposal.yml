@@ -1,0 +1,37 @@
+name: Scenario proposal
+description: A fault scenario for the benchmark.
+title: "scenario: "
+labels: ["area: bench"]
+body:
+  - type: markdown
+    attributes:
+      value: The scenario format and the list of root cause kinds are in [bench/README.md](https://github.com/dinhostork/IncidentLens/blob/main/bench/README.md).
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What goes wrong and what someone on call would see.
+    validations:
+      required: true
+  - type: textarea
+    id: trigger
+    attributes:
+      label: How to trigger it
+      description: Flags and values, a deploy if there is one, and whether a change event is recorded. If the demo cannot do it yet, say what is missing.
+      placeholder: |
+        payments.latency_ms.postgres=800 for 10m, no change event
+    validations:
+      required: true
+  - type: textarea
+    id: root-cause
+    attributes:
+      label: Expected root cause
+      description: Service, kind and dependency. A kind outside the current list needs an ADR, so explain why none of them fits.
+      placeholder: payments, dependency_latency, postgres
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Real-world source
+      description: A postmortem, an incident you saw, or nothing. Links are fine.
