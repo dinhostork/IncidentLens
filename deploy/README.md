@@ -4,7 +4,7 @@ Docker Compose stack for development: an OpenTelemetry Collector that writes to 
 
 ```sh
 make up       # build the demo images, start, wait until every service is healthy
-make smoke    # send test spans, run a demo checkout, check both land in otel.otel_traces
+make smoke    # send test spans, run a demo checkout, check both land in otel.otel_traces and the changes table exists
 make down     # stop, keep data
 make reset    # stop and delete the ClickHouse and Postgres volumes
 make fault SET="payments.latency_ms.postgres=800"   # turn a demo fault on, see demo/README.md
@@ -22,6 +22,7 @@ make fault-clear                                     # all faults off
 | `otel/collector.yaml` | Collector config: OTLP in, ClickHouse out |
 | `otel/debug.yaml` | Adds the `debug` exporter |
 | `clickhouse/config.d/low-memory.xml` | Smaller caches, noisy system logs turned off |
+| `clickhouse/init/` | SQL for IncidentLens's own tables, applied on every `make up` |
 | `flags/flags.json` | Fault flag definitions for the demo services, all off |
 | `flags/active.json` | The flags flagd serves: a copy of `flags.json` with the faults currently on. Not tracked, created by `make up`, changed with `make fault` (see [`demo/README.md`](../demo/README.md#faults)). |
 | `postgres/initdb/` | Creates one database and role per demo service on first start |
@@ -36,6 +37,7 @@ All ports are bound to `127.0.0.1`.
 |---|---|---|---|
 | `otel-collector` | `otel/opentelemetry-collector-contrib:0.165.0` | 4317 OTLP gRPC, 4318 OTLP HTTP | `health_check` extension on 13133 |
 | `clickhouse` | `clickhouse/clickhouse-server:26.8.48.11` (LTS) | 8123 HTTP, 9000 native | `/ping` |
+| `clickhouse-init` | same as `clickhouse` | none | none. Runs `clickhouse/init/*.sql` with `clickhouse-client` and exits. The Collector waits for it. |
 | `flagd` | `ghcr.io/open-feature/flagd:v0.18.2` | 8013 evaluation (gRPC), 8016 OFREP (HTTP). The demo services use the sync service on 8015 inside the compose network. | `/readyz` on 8014 |
 | `postgres` | `postgres:18.7-alpine` | none | `pg_isready` |
 | `redis` | `redis:8.12.0-alpine` | none | `redis-cli ping` |
@@ -75,6 +77,18 @@ The `otel` database is created by the ClickHouse image (`CLICKHOUSE_DB`). The Co
 | `otel_metrics_summary` | Summary points | 3 days on `TimeUnix` |
 
 The TTL comes from `ttl: 72h` in `otel/collector.yaml` and is applied only when a table is created. Changing it later needs an `ALTER TABLE ... MODIFY TTL`, or `make reset`.
+
+IncidentLens's own tables live in a separate `incidentlens` database, so the exporter's database is never written to by anything else ([ADR 0005](../docs/adr/0005-change-events.md)):
+
+| Table | Contents | TTL |
+|---|---|---|
+| `changes` | Change events, see [`changes/README.md`](../changes/README.md) | 90 days on `time` |
+
+The `clickhouse-init` service creates them on every `make up` from the files in `clickhouse/init/`, in name order. Every statement there must be safe to run again (`IF NOT EXISTS`). Since an existing table is never recreated, a change to a table goes in a new file with an `ALTER`, and files already merged are not edited. Against a ClickHouse outside this stack, run the files by hand:
+
+```sh
+for f in deploy/clickhouse/init/*.sql; do clickhouse-client --queries-file "$f"; done
+```
 
 ## Troubleshooting
 

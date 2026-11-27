@@ -134,7 +134,7 @@ A deploy can reach IncidentLens in two ways.
 
 **From telemetry.** A new `service.version` value appears for a service. The time of the deploy is the first span carrying the new value. During a rolling deploy both versions are present for a while, and `service.instance.id` shows how far the rollout got. Nothing extra has to be sent, but nothing else is known either: no author, no source, and no deploy at all if the version string did not change.
 
-**From a change event.** The deploy tool posts a `deploy` event to the changes API (Phase 1, see [architecture](architecture.md#changes-api-changes-go)) with `version.from` and `version.to`. This works even when no traffic reaches the new version, and it records where the change came from.
+**From a change event.** The deploy tool posts a `deploy` event to the changes API with `version.from` and `version.to` (format in [`changes/README.md`](../changes/README.md)). This works even when no traffic reaches the new version, and it records where the change came from.
 
 Both is best. When a change event and an observed version change refer to the same service and the same `version.to`, they are the same deploy and appear once in the bundle, with both as evidence. A version change with no matching event still appears, marked as inferred from telemetry. An event with no matching version change also appears. That usually means the new version never received traffic, which can be part of the story.
 

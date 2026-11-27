@@ -1,0 +1,13 @@
+{
+  "id": "gha-8812345-1",
+  "time": "2026-12-01T14:03:12Z",
+  "kind": "deploy",
+  "environment": "demo",
+  "service": "payments",
+  "attributes": {
+    "version.from": "1.0.0",
+    "version.to": "1.0.1",
+    "vcs.ref.head.revision": "4f2c9e1"
+  },
+  "source": "github-actions"
+}

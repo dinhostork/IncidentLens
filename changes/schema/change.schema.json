@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dinhostork/IncidentLens/blob/main/changes/schema/change.schema.json",
+  "title": "IncidentLens change event",
+  "description": "Something that changed in a system: a deploy, a config change, a feature flag flip or a note. This is the body a client posts to the changes API. See changes/README.md and docs/adr/0005-change-events.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["time", "kind", "environment", "source"],
+  "properties": {
+    "id": {
+      "description": "Unique ID of the event. Optional: the server assigns chg_<ULID> when it is missing. A client that sets it can retry the same post safely.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "time": {
+      "description": "When the change took effect, as an RFC 3339 timestamp with a UTC offset. Not when it was posted; the server records that separately.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "kind": {
+      "description": "What kind of change this is. Each kind has its own required fields, see the allOf below.",
+      "enum": ["deploy", "config", "flag", "note"]
+    },
+    "environment": {
+      "description": "Same value as the deployment.environment.name resource attribute of the affected services.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "service": {
+      "description": "Same value as the service.name resource attribute of the affected service. Required for deploys. Leave it out when the change is not tied to one service.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "description": {
+      "description": "Free text for people reading the timeline. Required for notes.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "attributes": {
+      "description": "String key/value pairs. Some keys are required depending on kind.",
+      "type": "object",
+      "maxProperties": 64,
+      "patternProperties": {
+        "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$": { "type": "string", "maxLength": 4096 }
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "description": "What posted the event, for example github-actions, scenario-runner or a person's handle.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "deploy" } }, "required": ["kind"] },
+      "then": {
+        "required": ["service", "attributes"],
+        "properties": {
+          "attributes": {
+            "required": ["version.from", "version.to"],
+            "properties": {
+              "version.from": {
+                "description": "Version that was running before. Empty for the first deploy of a service."
+              },
+              "version.to": {
+                "description": "Version being deployed. Must be the exact service.version string the new version reports in its telemetry.",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "flag" } }, "required": ["kind"] },
+      "then": {
+        "required": ["attributes"],
+        "properties": {
+          "attributes": {
+            "required": ["flag.key", "flag.value.from", "flag.value.to"],
+            "properties": {
+              "flag.key": { "description": "The flag's key in the flag system.", "minLength": 1 },
+              "flag.value.from": { "description": "Value before the change, as a string. Empty if the flag did not exist." },
+              "flag.value.to": { "description": "Value after the change, as a string. Empty if the flag was removed." }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "note" } }, "required": ["kind"] },
+      "then": { "required": ["description"] }
+    }
+  ]
+}

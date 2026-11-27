@@ -35,13 +35,16 @@ ps: ## Show stack status
 logs: ## Follow stack logs (SERVICE=name for one service)
 	$(COMPOSE) logs -f $(SERVICE)
 
-smoke: ## Check that test spans and a demo checkout flow reach ClickHouse
+smoke: ## Check that test spans and a demo checkout flow reach ClickHouse and that the changes table exists
 	$(COMPOSE) --profile smoke run --rm telemetrygen
 	@for i in $$(seq 1 30); do \
 	  n=$$($(CH_QUERY) "SELECT count() FROM otel.otel_traces WHERE ServiceName = 'smoke-test' AND Timestamp > now() - INTERVAL 5 MINUTE" 2>/dev/null); \
 	  if [ "$${n:-0}" -gt 0 ]; then echo "smoke: $$n spans in otel.otel_traces"; exit 0; fi; \
 	  sleep 1; \
 	done; echo "smoke: no spans reached otel.otel_traces after 30s" >&2; exit 1
+	@if [ "$$($(CH_QUERY) 'EXISTS TABLE incidentlens.changes' < /dev/null)" = 1 ]; then \
+	  echo "smoke: incidentlens.changes exists"; \
+	else echo "smoke: incidentlens.changes is missing" >&2; exit 1; fi
 	@COMPOSE="$(COMPOSE)" demo/smoke.sh
 
 ## Faults

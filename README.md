@@ -39,7 +39,7 @@ The repo includes a small demo system and a set of fault scenarios with known ro
 | Path | What | Language |
 |---|---|---|
 | `engine/` | Reconstruction engine and `incidentlens` CLI | Python |
-| `changes/` | Change events API | Go |
+| `changes/` | Change events API and event format ([README](changes/README.md)) | Go |
 | `web/` | Replay UI | TypeScript (Next.js) |
 | `demo/` | Demo system used for development and benchmarks ([README](demo/README.md)) | Go, Python |
 | `bench/` | Fault scenarios with ground truth, and their schema ([README](bench/README.md)) | YAML, Python |

@@ -1,0 +1,7 @@
+{
+  "time": "2026-12-01T13:30:00Z",
+  "kind": "config",
+  "environment": "demo",
+  "description": "Raised DB_POOL_MAX from 10 to 20 on every service",
+  "source": "manual"
+}
