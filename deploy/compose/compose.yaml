@@ -75,6 +75,32 @@ services:
       retries: 20
       start_period: 10s
 
+  # Creates IncidentLens's own tables from deploy/clickhouse/init/*.sql, in
+  # file name order. Runs on every `make up`; the statements are idempotent.
+  clickhouse-init:
+    image: clickhouse/clickhouse-server:26.8.48.11
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        for f in /init/*.sql; do
+          echo "applying $${f##*/}"
+          clickhouse-client --host clickhouse --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --queries-file "$$f"
+        done
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-incidentlens}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-incidentlens}
+    volumes:
+      - ../clickhouse/init:/init:ro
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.165.0
     command: ["--config=/etc/otelcol/collector.yaml"]
@@ -96,6 +122,10 @@ services:
         condition: service_completed_successfully
       clickhouse:
         condition: service_healthy
+      # Not needed by the Collector itself. Something has to depend on the
+      # one-shot init service, or `up --wait` fails when it exits.
+      clickhouse-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "/probe/busybox", "wget", "-qO-", "http://127.0.0.1:13133/"]
       interval: 5s

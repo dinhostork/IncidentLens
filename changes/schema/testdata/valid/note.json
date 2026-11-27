@@ -1,0 +1,8 @@
+{
+  "time": "2026-12-01T14:20:00Z",
+  "kind": "note",
+  "environment": "demo",
+  "service": "orders",
+  "description": "Checkout errors reported by support, investigating",
+  "source": "alice"
+}

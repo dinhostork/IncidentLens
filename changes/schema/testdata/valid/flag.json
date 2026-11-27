@@ -1,0 +1,13 @@
+{
+  "id": "run-20261201T140000Z-fault",
+  "time": "2026-12-01T14:05:00.123Z",
+  "kind": "flag",
+  "environment": "demo",
+  "service": "payments",
+  "attributes": {
+    "flag.key": "payments.latency_ms.postgres",
+    "flag.value.from": "0",
+    "flag.value.to": "800"
+  },
+  "source": "scenario-runner"
+}

@@ -8,5 +8,6 @@ Short records of decisions that would be costly to undo. One file per decision, 
 | [0002](0002-deterministic-core-optional-llm.md) | Deterministic reconstruction core, LLM only for narrative | Accepted |
 | [0003](0003-benchmark-first.md) | Build the scenario benchmark before the engine | Accepted |
 | [0004](0004-scenario-format.md) | Scenario format and ground truth | Accepted |
+| [0005](0005-change-events.md) | Change event format and the `changes` table | Accepted |
 
 Template: [`template.md`](template.md)

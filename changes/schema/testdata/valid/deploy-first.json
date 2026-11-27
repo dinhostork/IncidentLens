@@ -1,0 +1,11 @@
+{
+  "time": "2026-12-01T09:00:00.250-03:00",
+  "kind": "deploy",
+  "environment": "demo",
+  "service": "payments",
+  "attributes": {
+    "version.from": "",
+    "version.to": "1.0.0"
+  },
+  "source": "manual"
+}
