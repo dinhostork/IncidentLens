@@ -49,7 +49,6 @@ def test_cancelled_call_marks_span():
     from opentelemetry.trace import StatusCode
 
     from catalog import clients
-    from catalog.fault import Kind, Nop, Point
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -57,7 +56,7 @@ def test_cancelled_call_marks_span():
     tracer = provider.get_tracer("test")
 
     async def run():
-        async with clients._client_span("GET", {}, Nop(), Point(Kind.OUTBOUND, "redis")):
+        async with clients._client_span("GET", {}):
             await asyncio.sleep(10)
 
     async def main():

@@ -1,6 +1,9 @@
 // Package service is the common entry point of the Go demo services: it sets
 // up telemetry and the fault hook, builds the service's handler and serves it
 // until the process is told to stop.
+//
+// The fault hook reads flags named after OTEL_SERVICE_NAME from flagd
+// (FLAGD_HOST). See demo/README.md for the flags.
 package service
 
 import (
@@ -48,8 +51,20 @@ func run(setup Setup) (err error) {
 		}
 	}()
 
-	// Fault injection plugs in here. Nop until the flag-driven hook exists.
-	var hook fault.Hook = fault.Nop{}
+	name, err := RequireEnv("OTEL_SERVICE_NAME")
+	if err != nil {
+		return err
+	}
+	flags, closeFlags, err := fault.ConnectFlagd(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		cctx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		_ = closeFlags(cctx)
+	}()
+	hook := fault.NewInjector(name, flags)
 
 	h, cleanup, err := setup(ctx, hook)
 	if err != nil {

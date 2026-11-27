@@ -109,7 +109,7 @@ type faultTransport struct {
 
 func (t *faultTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	// The callee's route is not known here, and the raw path carries IDs.
-	p := fault.Point{Kind: fault.Outbound, Dependency: t.dep, Operation: r.Method}
+	p := fault.Point{Kind: fault.Outbound, Dependency: t.dep, Operation: r.Method, Address: r.URL.Host}
 	if err := t.hook.Before(r.Context(), p); err != nil {
 		if r.Body != nil {
 			_ = r.Body.Close()

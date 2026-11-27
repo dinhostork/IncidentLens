@@ -11,7 +11,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from catalog import seed, telemetry
 from catalog.app import create_app
 from catalog.clients import Postgres, Redis
-from catalog.fault import Hook, Nop
+from catalog.fault import Hook, Injector, connect_flagd
 from catalog.store import CachedStore
 
 log = logging.getLogger("catalog")
@@ -27,7 +27,7 @@ def build(hook: Hook) -> FastAPI:
         cache = Redis(redis_url, hook)
         await pg.execute(seed.SCHEMA)
         await pg.executemany(seed.INSERT, seed.products())
-        app.state.store = CachedStore(pg, cache)
+        app.state.store = CachedStore(pg, cache, hook.cache_disabled)
         log.info("catalog ready")
         try:
             yield
@@ -46,8 +46,8 @@ def build(hook: Hook) -> FastAPI:
 
 def main() -> None:
     shutdown = telemetry.setup()
-    # Fault injection plugs in here. Nop until the flag-driven hook exists.
-    hook: Hook = Nop()
+    flags, close_flags = connect_flagd()
+    hook: Hook = Injector(os.environ.get("OTEL_SERVICE_NAME", "catalog"), flags)
     try:
         uvicorn.run(
             build(hook),
@@ -60,6 +60,7 @@ def main() -> None:
             timeout_graceful_shutdown=5,
         )
     finally:
+        close_flags()
         shutdown()
 
 

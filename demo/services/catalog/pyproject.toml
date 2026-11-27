@@ -6,6 +6,8 @@ requires-python = ">=3.12"
 dependencies = [
     "asyncpg>=0.32.0",
     "fastapi>=0.165.0",
+    "openfeature-provider-flagd>=0.6.1",
+    "openfeature-sdk>=0.10.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.45.2",
     "opentelemetry-instrumentation-fastapi>=0.66b2",
     "opentelemetry-sdk>=1.45.2",

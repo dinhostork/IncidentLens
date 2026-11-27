@@ -5,6 +5,12 @@ instrumentations so that the fault hook runs inside the span, and so the
 attributes match the Go services: db.system.name, db.namespace,
 server.address. A Postgres span starts before a connection is taken from the
 pool, so pool waits count as time spent calling Postgres.
+
+For Postgres the hook runs once the connection is held, so injected latency
+keeps the connection busy the way a slow query does. The hook's pool_size can
+shrink the pool at runtime. asyncpg pools cannot be resized, so a limiter in
+front of the pool caps how many connections are taken at once, like the Go
+services do.
 """
 
 import asyncio
@@ -21,6 +27,7 @@ from opentelemetry.metrics import CallbackOptions, Observation
 from opentelemetry.semconv.attributes import db_attributes as db
 from opentelemetry.semconv.attributes import error_attributes, server_attributes
 from opentelemetry.trace import SpanKind, Status, StatusCode
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from catalog.fault import Hook, Kind, Point
 
@@ -40,7 +47,8 @@ def _error_type(exc: BaseException) -> str:
 
 
 @asynccontextmanager
-async def _client_span(name: str, attrs: dict[str, Any], hook: Hook, point: Point):
+async def _client_span(name: str, attrs: dict[str, Any]):
+    """Client span that records the outcome of the call made inside it."""
     with tracer.start_as_current_span(
         name,
         kind=SpanKind.CLIENT,
@@ -49,7 +57,6 @@ async def _client_span(name: str, attrs: dict[str, Any], hook: Hook, point: Poin
         set_status_on_exception=False,
     ) as span:
         try:
-            await hook.before(point)
             yield span
         except asyncio.CancelledError:
             # Not an Exception subclass. Record it like the Go side does, then
@@ -87,6 +94,35 @@ def _summarize(query: str) -> tuple[str, str]:
 DEFAULT_POOL_MAX = 10
 
 
+class _Limiter:
+    """Caps concurrent holders at limit(), read on every acquire; 0 means no cap.
+
+    A caller only waits while the cap is reached, so some holder will release
+    and wake it. A raised cap takes effect on that wakeup.
+    """
+
+    def __init__(self, limit: Callable[[], int]):
+        self._limit = limit
+        self._in_use = 0
+        self._cond = asyncio.Condition()
+
+    def _free(self) -> bool:
+        n = self._limit()
+        return n <= 0 or self._in_use < n
+
+    @asynccontextmanager
+    async def slot(self):
+        async with self._cond:
+            await self._cond.wait_for(self._free)
+            self._in_use += 1
+        try:
+            yield
+        finally:
+            async with self._cond:
+                self._in_use -= 1
+                self._cond.notify_all()
+
+
 def pool_max() -> int:
     raw = os.environ.get("DB_POOL_MAX", "")
     if not raw:
@@ -102,7 +138,9 @@ class Postgres:
     def __init__(self, pool: asyncpg.Pool, dsn: str, hook: Hook):
         self._pool = pool
         self._hook = hook
+        self._limiter = _Limiter(hook.pool_size)
         u = urlsplit(dsn)
+        self._address = f"{u.hostname}:{u.port or 5432}"
         self._attrs = {
             db.DB_SYSTEM_NAME: "postgresql",
             db.DB_NAMESPACE: u.path.lstrip("/"),
@@ -120,9 +158,7 @@ class Postgres:
             "db.client.connection.max",
             callbacks=[
                 lambda _: [
-                    Observation(
-                        self._pool.get_max_size(), {"db.client.connection.pool.name": pool_name}
-                    )
+                    Observation(self._max_size(), {"db.client.connection.pool.name": pool_name})
                 ]
             ],
             unit="{connection}",
@@ -135,6 +171,11 @@ class Postgres:
         max_size = pool_max()
         pool = await asyncpg.create_pool(dsn, min_size=min(2, max_size), max_size=max_size)
         return cls(pool, dsn, hook)
+
+    def _max_size(self) -> int:
+        """The pool's size, or the hook's smaller cap: a smaller pool reports a smaller max."""
+        size, cap = self._pool.get_max_size(), self._hook.pool_size()
+        return min(size, cap) if cap > 0 else size
 
     def _observe_count(self, pool_name: str):
         def cb(_: CallbackOptions) -> Iterable[Observation]:
@@ -155,9 +196,10 @@ class Postgres:
         if coll:
             attrs[db.DB_COLLECTION_NAME] = coll
         name = f"{op} {coll}".strip() or "postgresql"
-        point = Point(Kind.OUTBOUND, POSTGRES, op)
-        async with _client_span(name, attrs, self._hook, point):
-            async with self._pool.acquire() as conn:
+        point = Point(Kind.OUTBOUND, POSTGRES, op, self._address)
+        async with _client_span(name, attrs):
+            async with self._limiter.slot(), self._pool.acquire() as conn:
+                await self._hook.before(point)
                 return await call(conn)
 
     async def fetch(self, query: str, *args: Any) -> list[asyncpg.Record]:
@@ -184,7 +226,8 @@ class Redis:
         self._client = redis.Redis.from_url(
             url, socket_timeout=timeout, socket_connect_timeout=timeout
         )
-        self._hook = hook
+        self._address = f"{u.hostname}:{u.port or 6379}"
+        self._hook = _SocketTimeout(hook, timeout, self._address)
         self._attrs = {
             db.DB_SYSTEM_NAME: "redis",
             db.DB_NAMESPACE: (u.path.lstrip("/") or "0"),
@@ -194,7 +237,9 @@ class Redis:
 
     async def _run(self, command: str, key: str, call: Callable[[], Awaitable[Any]]) -> Any:
         attrs = {**self._attrs, db.DB_OPERATION_NAME: command, db.DB_QUERY_TEXT: f"{command} {key}"}
-        async with _client_span(command, attrs, self._hook, Point(Kind.OUTBOUND, REDIS, command)):
+        point = Point(Kind.OUTBOUND, REDIS, command, self._address)
+        async with _client_span(command, attrs):
+            await self._hook.before(point)
             return await call()
 
     async def get(self, key: str) -> bytes | None:
@@ -205,3 +250,23 @@ class Redis:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+
+class _SocketTimeout:
+    """Applies the Redis client's socket timeout to the hook's injected delay.
+
+    A Redis that answers slower than the timeout makes redis-py give up with a
+    TimeoutError; an injected delay should end the same way.
+    """
+
+    def __init__(self, hook: Hook, timeout: float, address: str):
+        self._hook = hook
+        self._timeout = timeout
+        self._address = address
+
+    async def before(self, point: Point) -> None:
+        try:
+            async with asyncio.timeout(self._timeout):
+                await self._hook.before(point)
+        except TimeoutError:
+            raise RedisTimeoutError(f"Timeout reading from {self._address}") from None

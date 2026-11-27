@@ -7,6 +7,8 @@ make up       # build the demo images, start, wait until every service is health
 make smoke    # send test spans, run a demo checkout, check both land in otel.otel_traces
 make down     # stop, keep data
 make reset    # stop and delete the ClickHouse and Postgres volumes
+make fault SET="payments.latency_ms.postgres=800"   # turn a demo fault on, see demo/README.md
+make fault-clear                                     # all faults off
 ```
 
 `make up DEBUG=1` adds the Collector's `debug` exporter to every pipeline, so received telemetry is also printed to `make logs SERVICE=otel-collector`.
@@ -20,7 +22,8 @@ make reset    # stop and delete the ClickHouse and Postgres volumes
 | `otel/collector.yaml` | Collector config: OTLP in, ClickHouse out |
 | `otel/debug.yaml` | Adds the `debug` exporter |
 | `clickhouse/config.d/low-memory.xml` | Smaller caches, noisy system logs turned off |
-| `flags/flags.json` | flagd flag definitions. Empty until the demo fault flags land. |
+| `flags/flags.json` | Fault flag definitions for the demo services, all off |
+| `flags/active.json` | The flags flagd serves: a copy of `flags.json` with the faults currently on. Not tracked, created by `make up`, changed with `make fault` (see [`demo/README.md`](../demo/README.md#faults)). |
 | `postgres/initdb/` | Creates one database and role per demo service on first start |
 
 The demo service images are built from `demo/` (see [`demo/README.md`](../demo/README.md#layout)).
@@ -33,7 +36,7 @@ All ports are bound to `127.0.0.1`.
 |---|---|---|---|
 | `otel-collector` | `otel/opentelemetry-collector-contrib:0.165.0` | 4317 OTLP gRPC, 4318 OTLP HTTP | `health_check` extension on 13133 |
 | `clickhouse` | `clickhouse/clickhouse-server:26.8.48.11` (LTS) | 8123 HTTP, 9000 native | `/ping` |
-| `flagd` | `ghcr.io/open-feature/flagd:v0.18.2` | 8013 evaluation (gRPC), 8016 OFREP (HTTP) | `/readyz` on 8014 |
+| `flagd` | `ghcr.io/open-feature/flagd:v0.18.2` | 8013 evaluation (gRPC), 8016 OFREP (HTTP). The demo services use the sync service on 8015 inside the compose network. | `/readyz` on 8014 |
 | `postgres` | `postgres:18.7-alpine` | none | `pg_isready` |
 | `redis` | `redis:8.12.0-alpine` | none | `redis-cli ping` |
 | `gateway` | built from `demo/services/gateway` | 8080 (`GATEWAY_PORT`) | `/healthz` |

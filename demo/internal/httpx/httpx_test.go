@@ -16,6 +16,7 @@ import (
 // failOn fails calls to one dependency, or inbound requests if dep is empty,
 // and records what it saw.
 type failOn struct {
+	fault.Nop
 	kind fault.Kind
 	dep  string
 	seen []fault.Point
@@ -51,7 +52,7 @@ func TestClientRunsHook(t *testing.T) {
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("server got %d calls, want 1", n)
 	}
-	want := fault.Point{Kind: fault.Outbound, Dependency: "payments", Operation: "POST"}
+	want := fault.Point{Kind: fault.Outbound, Dependency: "payments", Operation: "POST", Address: strings.TrimPrefix(srv.URL, "http://")}
 	if got := hook.seen[len(hook.seen)-1]; got != want {
 		t.Fatalf("hook saw %+v, want %+v", got, want)
 	}

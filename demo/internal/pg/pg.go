@@ -4,6 +4,11 @@
 //
 // Spans start before a connection is taken from the pool, so time spent
 // waiting for a free connection is part of the caller's view of the call.
+//
+// The hook's PoolSize can shrink the pool at runtime. pgxpool cannot be
+// resized, so a limiter in front of it caps how many connections are taken
+// at once; callers over the cap wait, as they would on a smaller pool. The
+// hook's Before runs once the connection is held.
 package pg
 
 import (
@@ -47,6 +52,7 @@ type Querier interface {
 type DB struct {
 	conn
 	pool *pgxpool.Pool
+	lim  *limiter
 }
 
 // DefaultPoolMax is the pool size when DB_POOL_MAX is not set.
@@ -80,8 +86,9 @@ func Open(ctx context.Context, dsn string, hook fault.Hook) (*DB, error) {
 
 	cc := cfg.ConnConfig
 	in := &instr{
-		tracer: otel.Tracer(scope),
-		hook:   hook,
+		tracer:  otel.Tracer(scope),
+		hook:    hook,
+		address: net.JoinHostPort(cc.Host, strconv.Itoa(int(cc.Port))),
 		attrs: []attribute.KeyValue{
 			semconv.DBSystemNamePostgreSQL,
 			semconv.DBNamespace(cc.Database),
@@ -89,32 +96,63 @@ func Open(ctx context.Context, dsn string, hook fault.Hook) (*DB, error) {
 			semconv.ServerPort(int(cc.Port)),
 		},
 	}
-	if err := registerPoolMetrics(pool, cc.Host+"/"+cc.Database); err != nil {
+	db := &DB{pool: pool, lim: newLimiter(hook.PoolSize)}
+	db.conn = conn{in: in, acquire: db.acquire}
+	if err := registerPoolMetrics(pool, db.lim, cc.Host+"/"+cc.Database); err != nil {
 		pool.Close()
 		return nil, err
 	}
-	return &DB{conn: conn{q: pool, in: in}, pool: pool}, nil
+	return db, nil
 }
 
 // Close closes the pool.
 func (db *DB) Close() { db.pool.Close() }
 
-// InTx runs fn in a transaction, committing if fn returns nil.
+// acquire takes a limiter slot and then a connection from the pool. The
+// returned function gives both back.
+func (db *DB) acquire(ctx context.Context) (*pgxpool.Conn, func(), error) {
+	releaseSlot, err := db.lim.acquire(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	c, err := db.pool.Acquire(ctx)
+	if err != nil {
+		releaseSlot()
+		return nil, nil, err
+	}
+	return c, func() { c.Release(); releaseSlot() }, nil
+}
+
+// InTx runs fn in a transaction, committing if fn returns nil. The
+// transaction keeps its connection, and its limiter slot, until it ends.
 func (db *DB) InTx(ctx context.Context, fn func(Querier) error) (err error) {
-	var tx pgx.Tx
-	err = db.in.run(ctx, "BEGIN", func(ctx context.Context) (err error) {
-		tx, err = db.pool.Begin(ctx)
-		return err
-	})
+	var (
+		tx      pgx.Tx
+		release func()
+	)
+	bctx, span := db.in.start(ctx, "BEGIN")
+	c, rel, err := db.acquire(bctx)
+	if err == nil {
+		if err = db.in.before(bctx, "BEGIN"); err == nil {
+			tx, err = c.Begin(bctx)
+		}
+		if err != nil {
+			rel()
+		} else {
+			release = rel
+		}
+	}
+	db.in.end(span, err)
 	if err != nil {
 		return err
 	}
+	defer release()
 	defer func() {
 		if err != nil {
 			_ = tx.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
-	if err = fn(conn{q: tx, in: db.in}); err != nil {
+	if err = fn(conn{in: db.in, q: tx}); err != nil {
 		return err
 	}
 	return db.in.run(ctx, "COMMIT", tx.Commit)
@@ -125,17 +163,40 @@ type pgxQuerier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
+// conn runs statements and gives each a span. Outside a transaction acquire
+// takes a connection per statement. Inside one, q is the transaction.
+//
+// The fault hook runs after the connection is taken, so injected latency
+// holds the connection the way a slow query does, and enough of it exhausts
+// the pool.
 type conn struct {
-	q  pgxQuerier
-	in *instr
+	in      *instr
+	acquire func(context.Context) (*pgxpool.Conn, func(), error)
+	q       pgxQuerier
+}
+
+func (c conn) querier(ctx context.Context) (pgxQuerier, func(), error) {
+	if c.acquire == nil {
+		return c.q, func() {}, nil
+	}
+	pc, release, err := c.acquire(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return pc, release, nil
 }
 
 func (c conn) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	ctx, span := c.in.start(ctx, sql)
 	var tag pgconn.CommandTag
-	err := c.in.run(ctx, sql, func(ctx context.Context) (err error) {
-		tag, err = c.q.Exec(ctx, sql, args...)
-		return err
-	})
+	q, release, err := c.querier(ctx)
+	if err == nil {
+		if err = c.in.before(ctx, sql); err == nil {
+			tag, err = q.Exec(ctx, sql, args...)
+		}
+		release()
+	}
+	c.in.end(span, err)
 	return tag, err
 }
 
@@ -149,16 +210,24 @@ func (c conn) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, err
 
 func (c conn) query(ctx context.Context, sql string, args ...any) (*tracedRows, error) {
 	ctx, span := c.in.start(ctx, sql)
-	if err := c.in.before(ctx, sql); err != nil {
-		c.in.end(span, err)
-		return nil, err
-	}
-	rows, err := c.q.Query(ctx, sql, args...)
+	q, release, err := c.querier(ctx)
 	if err != nil {
 		c.in.end(span, err)
 		return nil, err
 	}
-	return &tracedRows{Rows: rows, end: func(err error) { c.in.end(span, err) }}, nil
+	if err := c.in.before(ctx, sql); err != nil {
+		release()
+		c.in.end(span, err)
+		return nil, err
+	}
+	rows, err := q.Query(ctx, sql, args...)
+	if err != nil {
+		release()
+		c.in.end(span, err)
+		return nil, err
+	}
+	// The connection goes back once the rows are closed.
+	return &tracedRows{Rows: rows, end: func(err error) { release(); c.in.end(span, err) }}, nil
 }
 
 func (c conn) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
@@ -167,9 +236,10 @@ func (c conn) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 }
 
 type instr struct {
-	tracer trace.Tracer
-	hook   fault.Hook
-	attrs  []attribute.KeyValue
+	tracer  trace.Tracer
+	hook    fault.Hook
+	address string
+	attrs   []attribute.KeyValue
 }
 
 func (in *instr) start(ctx context.Context, sql string) (context.Context, trace.Span) {
@@ -192,7 +262,7 @@ func (in *instr) start(ctx context.Context, sql string) (context.Context, trace.
 
 func (in *instr) before(ctx context.Context, sql string) error {
 	op, _ := summarize(sql)
-	return in.hook.Before(ctx, fault.Point{Kind: fault.Outbound, Dependency: Dependency, Operation: op})
+	return in.hook.Before(ctx, fault.Point{Kind: fault.Outbound, Dependency: Dependency, Operation: op, Address: in.address})
 }
 
 func (in *instr) run(ctx context.Context, sql string, fn func(context.Context) error) error {
@@ -287,7 +357,7 @@ func (r *row) Scan(dest ...any) error {
 	return r.rows.Err()
 }
 
-func registerPoolMetrics(pool *pgxpool.Pool, poolName string) error {
+func registerPoolMetrics(pool *pgxpool.Pool, lim *limiter, poolName string) error {
 	m := otel.Meter(scope)
 	count, err := m.Int64ObservableUpDownCounter("db.client.connection.count",
 		metric.WithUnit("{connection}"),
@@ -304,11 +374,16 @@ func registerPoolMetrics(pool *pgxpool.Pool, poolName string) error {
 	name := attribute.String("db.client.connection.pool.name", poolName)
 	idle := metric.WithAttributes(name, attribute.String("db.client.connection.state", "idle"))
 	used := metric.WithAttributes(name, attribute.String("db.client.connection.state", "used"))
-	_, err = m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+	_, err = m.RegisterCallback(func(ctx context.Context, o metric.Observer) error {
 		s := pool.Stat()
+		// A smaller pool reports a smaller maximum.
+		limit := s.MaxConns()
+		if n := lim.limit(ctx); n > 0 && int32(n) < limit {
+			limit = int32(n)
+		}
 		o.ObserveInt64(count, int64(s.IdleConns()), idle)
 		o.ObserveInt64(count, int64(s.AcquiredConns()), used)
-		o.ObserveInt64(maxConns, int64(s.MaxConns()), metric.WithAttributes(name))
+		o.ObserveInt64(maxConns, int64(limit), metric.WithAttributes(name))
 		return nil
 	}, count, maxConns)
 	return err

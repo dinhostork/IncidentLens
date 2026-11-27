@@ -1,4 +1,201 @@
 {
   "$schema": "https://flagd.dev/schema/v0/flags.json",
-  "flags": {}
+  "flags": {
+    "gateway.cpu_burn_ms": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "gateway.error_rate": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "gateway.error_rate.catalog": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "gateway.error_rate.orders": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "gateway.latency_ms.catalog": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "gateway.latency_ms.orders": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "catalog.cache_disabled": {
+      "state": "ENABLED",
+      "variants": {
+        "off": false
+      },
+      "defaultVariant": "off"
+    },
+    "catalog.cpu_burn_ms": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "catalog.error_rate": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "catalog.error_rate.postgres": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "catalog.error_rate.redis": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "catalog.latency_ms.postgres": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "catalog.latency_ms.redis": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "catalog.pool_size": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "orders.cpu_burn_ms": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "orders.error_rate": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "orders.error_rate.catalog": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "orders.error_rate.payments": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "orders.error_rate.postgres": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "orders.latency_ms.catalog": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "orders.latency_ms.payments": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "orders.latency_ms.postgres": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "orders.pool_size": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "payments.cpu_burn_ms": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "payments.error_rate": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "payments.error_rate.postgres": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "payments.latency_ms.postgres": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    },
+    "payments.pool_size": {
+      "state": "ENABLED",
+      "variants": {
+        "off": 0
+      },
+      "defaultVariant": "off"
+    }
+  }
 }

@@ -1,11 +1,14 @@
 """Product lookups: Redis first, Postgres on a miss (cache-aside).
 
 A failing cache is not fatal. Reads fall through to Postgres and a warning is
-logged, which is how a Redis problem turns into extra load on Postgres.
+logged, which is how a Redis problem turns into extra load on Postgres. When
+the cache is turned off (the ``catalog.cache_disabled`` fault) every read goes
+to Postgres and Redis is not called at all.
 """
 
 import json
 import logging
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from catalog.clients import Postgres, Redis
@@ -36,11 +39,16 @@ def _row(r: Any) -> dict[str, Any]:
 
 
 class CachedStore:
-    def __init__(self, pg: Postgres, cache: Redis):
+    def __init__(
+        self, pg: Postgres, cache: Redis, cache_disabled: Callable[[], bool] = lambda: False
+    ):
         self._pg = pg
         self._cache = cache
+        self._disabled = cache_disabled
 
     async def _cache_get(self, key: str) -> Any | None:
+        if self._disabled():
+            return None
         try:
             raw = await self._cache.get(key)
         except Exception as exc:
@@ -52,6 +60,8 @@ class CachedStore:
         return json.loads(raw) if raw is not None else None
 
     async def _cache_set(self, key: str, value: Any, ttl: int) -> None:
+        if self._disabled():
+            return
         try:
             await self._cache.set(key, json.dumps(value), ttl)
         except Exception as exc:
