@@ -1,0 +1,35 @@
+name: Bug report
+description: Something in the repo does not work as documented.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Include the command you ran and its output or error.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. make up
+        2. make fault SET="payments.latency_ms.postgres=800"
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: Commit (`git rev-parse --short HEAD`), OS, `docker compose version`, and Go, uv or Node if the problem is in a build or test.
+      render: text
+    validations:
+      required: true
