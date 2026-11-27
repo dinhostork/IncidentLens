@@ -1,0 +1,22 @@
+id: catalog-cpu-burn
+description: >
+  Every catalog request spends 30 ms on the CPU. catalog runs on one event
+  loop, so requests queue behind each other and its Redis calls look slow from
+  inside catalog too, although Redis is fine.
+warmup: 5m
+fault:
+  flags:
+    catalog.cpu_burn_ms: 30
+  duration: 10m
+change_event: none
+expected:
+  root_cause:
+    service: catalog
+    kind: cpu_saturation
+  symptoms:
+    - service: catalog
+      signal: latency
+    - service: orders
+      signal: latency
+    - service: gateway
+      signal: latency

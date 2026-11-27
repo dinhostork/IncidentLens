@@ -39,7 +39,7 @@ The repo includes a small demo system and a set of fault scenarios with known ro
 | `changes/` | Change events API | Go |
 | `web/` | Replay UI | TypeScript (Next.js) |
 | `demo/` | Demo system used for development and benchmarks ([README](demo/README.md)) | Go, Python |
-| `bench/scenarios/` | Fault scenarios with ground truth | YAML |
+| `bench/` | Fault scenarios with ground truth, and their schema ([README](bench/README.md)) | YAML, Python |
 | `deploy/` | Docker Compose stack, Collector config | |
 | `docs/` | Roadmap, architecture, decision records | |
 

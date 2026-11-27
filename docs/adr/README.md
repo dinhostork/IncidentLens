@@ -7,5 +7,6 @@ Short records of decisions that would be costly to undo. One file per decision, 
 | [0001](0001-clickhouse-as-telemetry-store.md) | ClickHouse as the telemetry store, written by the stock Collector exporter | Accepted |
 | [0002](0002-deterministic-core-optional-llm.md) | Deterministic reconstruction core, LLM only for narrative | Accepted |
 | [0003](0003-benchmark-first.md) | Build the scenario benchmark before the engine | Accepted |
+| [0004](0004-scenario-format.md) | Scenario format and ground truth | Accepted |
 
 Template: [`template.md`](template.md)
