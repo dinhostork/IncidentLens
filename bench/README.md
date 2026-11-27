@@ -47,7 +47,7 @@ Durations are whole seconds or minutes (`90s`, `5m`). Flag keys and values are t
 
 ### A run
 
-A run sets the `baseline` flags, waits for `warmup`, starts the fault, records the change event if `change_event` asks for one, holds the fault for `duration` and then clears every flag. The window to reconstruct runs from the start of the warmup to the end of the fault. [Running a scenario](#running-a-scenario) has the details.
+A run sets the `baseline` flags, waits for `warmup`, starts the fault, records the change event if `change_event` asks for one, holds the fault for `duration` and then clears every flag. A fault with `deploy` also restarts the service with the new version, and puts the old one back at the end. The window to reconstruct runs from the start of the warmup to the end of the fault. [Running a scenario](#running-a-scenario) has the details.
 
 ### Baseline flags
 
@@ -65,7 +65,7 @@ Use them only when a scenario needs them, and say why in a comment.
 | `flag` | One `flag` change event per fault flag. Not allowed together with `deploy`. |
 | `deploy` | One `deploy` change event for the service and version in `fault.deploy`. Requires `deploy`. |
 
-In a deploy scenario the fault flags stand for what the new version does wrong, so they are never recorded as flag changes. A deploy with `change_event: none` is still visible in telemetry, as a new `service.version`.
+In a deploy scenario the fault flags stand for what the new version does wrong, so they are never recorded as flag changes. The `deploy` event is timed at the start of the rollout, as a CI job would post it. A deploy with `change_event: none` is still visible in telemetry, as a new `service.version`.
 
 Real incidents often have no recorded change, and an engine that leans on change events would look better than it is if every scenario had one. Keep a fair share of scenarios at `none`.
 
@@ -108,18 +108,20 @@ make scenario ID=catalog-cache-disabled WARMUP=30s DURATION=1m   # shorter, whil
 
 `make scenario` runs `incidentlens scenario run <id>` from [`engine/`](../engine/). The runner:
 
-1. Checks the scenario as `make check-scenarios` does, and refuses to start unless every service in the stack is running and healthy, the load generator is running and no fault flag is on. It does not touch flags it did not set.
+1. Checks the scenario as `make check-scenarios` does, and refuses to start unless every service in the stack is running and healthy, the load generator is running and no fault flag is on. It does not touch flags it did not set. A deploy scenario is also refused when the service already runs the new version.
 2. Sets the `baseline` flags and waits until flagd serves them.
 3. Waits for `warmup`.
-4. Sets the `fault` flags. With `change_event: flag` it posts one `flag` change event per fault flag to the [changes API](../changes/README.md), timed when the flags were written. Then it waits until flagd serves them.
-5. Holds the fault for `duration`, counted from when the flags were written.
-6. Clears every flag and waits until flagd serves them off.
+4. Starts the fault:
+   - Without `deploy`, sets the `fault` flags. With `change_event: flag` it posts one `flag` change event per fault flag to the [changes API](../changes/README.md), timed when the flags were written. Then it waits until flagd serves them.
+   - With `deploy`, posts the `deploy` change event if `change_event: deploy`, stops the service, sets the `fault` flags and waits until flagd serves them, then starts the service with `<SERVICE>_VERSION` set to the new version and waits until it is healthy. Nothing else in the stack is restarted.
+5. Holds the fault for `duration`, counted from when the flags were written, or from the start of the rollout for a deploy.
+6. Clears every flag and waits until flagd serves them off. After a deploy, restarts the service with the version it had before.
 
 Flags are written by `demo/faults.py`, the same code `make fault` runs. Whether flagd serves a value is checked over its OFREP endpoint (port 8016); the services get the same update from flagd's sync stream, usually within a second of the write.
 
-Step 6 also runs on Ctrl-C, on SIGTERM and when a step fails. Further Ctrl-C presses during cleanup do not stop it. If the flags cannot be cleared the runner says so and exits 1; run `make fault-clear` and check `make faults`.
+Step 6 also runs on Ctrl-C, on SIGTERM and when a step fails. Further Ctrl-C presses during cleanup do not stop it. If the flags cannot be cleared the runner says so and exits 1; run `make fault-clear` and check `make faults`. If the old version cannot be put back it exits 1 and prints the command that does it.
 
-Scenarios with `fault.deploy` (`payments-bad-deploy`) are refused until [#27](https://github.com/dinhostork/IncidentLens/issues/27). By hand, use `make fault` and the commands in [Simulating a deploy](../demo/README.md#simulating-a-deploy).
+The flags of a deploy go on while neither version runs, so spans of the old version never show the bug and the new version has it from its first request. Stopping one and starting the other takes about 6 to 8 seconds, during which calls to the service fail, as they would in a real deploy without a rolling update. Why it is done this way: [ADR 0007](../docs/adr/0007-deploys-in-scenario-runs.md).
 
 | Variable | Default | |
 |---|---|---|
@@ -144,14 +146,15 @@ Each run writes `runs/<scenario id>-<UTC start time>/manifest.json` at the repo 
 | `environment` | The demo's `deployment.environment.name`. |
 | `window` | `start` and `end` of the window to reconstruct. `null` if the run stopped before the fault started. |
 | `warmup`, `duration`, `overrides` | Effective values, and the ones given on the command line. |
-| `steps` | Each step with its time: `started`, `baseline_set`, `baseline_applied`, `warmup_started`, `fault_set`, `change_events_posted`, `fault_applied`, `fault_ended`, `flags_cleared`, `flags_off`. Steps that did not happen are left out. |
+| `steps` | Each step with its time: `started`, `baseline_set`, `baseline_applied`, `warmup_started`, `fault_set`, `change_events_posted`, `fault_applied`, `fault_ended`, `flags_cleared`, `flags_off`. Deploys add `deploy_started` (the start of the rollout, before `change_events_posted`), `old_version_stopped` and `new_version_healthy`, and after `flags_off`, `rollback_started` and `rollback_healthy`. Steps that did not happen are left out. |
 | `flags` | `baseline` and `fault` flags from the scenario. |
-| `change_events` | IDs of the change events posted, `<run id>.<flag key>`. |
+| `change_events` | IDs of the change events posted: `<run id>.<flag key>` for flags, `<run id>.deploy` for a deploy. |
+| `deploy` | `service` and `version` (`from`, `to`) of the deploy, or `null`. |
 | `expected` | Copied from the scenario. |
 | `load` | `LOADGEN_*` from the load generator and `DB_POOL_MAX` per service, as the containers have them. `null` means unset, so the service default of 10. |
-| `versions` | `service.version` of each demo service. |
+| `versions` | `service.version` of each demo service when the run started. |
 
-The window starts at `warmup_started` and ends at `fault_ended`. Times are UTC with millisecond precision.
+The window starts at `warmup_started` and ends at `fault_ended`. For a deploy it includes the restart. Times are UTC with millisecond precision.
 
 ## Writing a scenario
 

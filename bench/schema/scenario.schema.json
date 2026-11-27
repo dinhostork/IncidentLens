@@ -31,7 +31,7 @@
       }
     },
     "fault": {
-      "description": "What changes when the fault starts. A deploy happens first; the flags are set once the new version is up.",
+      "description": "What changes when the fault starts. With a deploy, the flags are set after the old version stops and before the new one starts, so they stand for what the new version does wrong.",
       "type": "object",
       "additionalProperties": false,
       "required": ["duration"],

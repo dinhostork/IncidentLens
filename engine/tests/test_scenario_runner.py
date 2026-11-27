@@ -15,6 +15,7 @@ OFF = {
     "catalog.cache_disabled": False,
     "catalog.latency_ms.postgres": 0,
     "payments.latency_ms.postgres": 0,
+    "payments.error_rate": 0,
     "orders.pool_size": 0,
 }
 INFO = StackInfo(
@@ -100,13 +101,38 @@ class Changes:
 
 
 class Stack:
-    def __init__(self, problem: str | None = None) -> None:
+    """Stopping takes 2s and starting a version 8s. fail: versions that never get healthy."""
+
+    def __init__(self, log: list, clock: Clock, problem: str | None = None) -> None:
         self.problem = problem
+        self.log = log
+        self.clock = clock
+        self.versions = dict(INFO.versions)
+        self.running = set(self.versions)
+        self.fail: set[str] = set()
+        # Ctrl-C presses that land while starting a version, per version.
+        self.interrupts: dict[str, int] = {}
 
     def check(self) -> StackInfo:
         if self.problem:
             raise ScenarioError(self.problem)
-        return INFO
+        return StackInfo(INFO.environment, INFO.load, dict(self.versions))
+
+    def stop(self, service: str) -> None:
+        self.log.append(("stop", service))
+        self.running.discard(service)
+        self.clock.advance(2)
+
+    def deploy(self, service: str, version: str) -> None:
+        if self.interrupts.get(version):
+            self.interrupts[version] -= 1
+            raise KeyboardInterrupt
+        self.log.append(("deploy", service, version))
+        self.clock.advance(8)
+        if version in self.fail:
+            raise RunError(f"{service} is unhealthy")
+        self.versions[service] = version
+        self.running.add(service)
 
 
 def scenario(**kw: Any) -> Scenario:
@@ -132,7 +158,7 @@ class Harness:
         self.clock = Clock(self.log, kw.pop("interrupt_on_sleep", None))
         self.flags = Flags(self.log, self.clock, kw.pop("on", None))
         self.changes = Changes(self.log, kw.pop("changes_fail", False))
-        self.stack = Stack(kw.pop("stack_problem", None))
+        self.stack = Stack(self.log, self.clock, kw.pop("stack_problem", None))
         self.runs = tmp_path / "runs"
         self.messages: list[str] = []
         self.kw = kw
@@ -223,6 +249,7 @@ def test_manifest(tmp_path: Path) -> None:
     }
     assert m["change_events"] == ["catalog-cache-disabled-20261201T140000Z.catalog.cache_disabled"]
     assert m["expected"] == scenario().expected
+    assert m["deploy"] is None
     assert m["load"] == INFO.load
     assert m["versions"] == INFO.versions
 
@@ -364,14 +391,188 @@ def test_refuses_when_the_stack_is_not_ready(tmp_path: Path) -> None:
     assert not h.runs.exists()
 
 
-def test_refuses_a_deploy(tmp_path: Path) -> None:
+def bad_deploy(**kw: Any) -> Scenario:
+    fields: dict[str, Any] = {
+        "id": "payments-bad-deploy",
+        "file": "bench/scenarios/payments-bad-deploy.yaml",
+        "baseline": {},
+        "fault": {"payments.error_rate": 0.25},
+        "deploy": {"service": "payments", "version": "1.0.1"},
+        "change_event": "deploy",
+        "expected": {"root_cause": {"service": "payments", "kind": "handler_errors"}},
+    }
+    fields.update(kw)
+    return scenario(**fields)
+
+
+def test_deploy_scenario_runs_the_steps_in_order(tmp_path: Path) -> None:
     h = Harness(tmp_path)
-    s = scenario(
-        id="payments-bad-deploy",
-        deploy={"service": "payments", "version": "1.0.1"},
-        change_event="deploy",
-    )
-    with pytest.raises(ScenarioError, match="#27"):
-        h.run(s)
+    result = h.run(bad_deploy())
+
+    assert result.status == "completed"
+    assert h.log == [
+        ("sleep", 300),
+        ("post", "payments-bad-deploy-20261201T140000Z.deploy"),
+        # The flags go on while no payments container runs, so 1.0.0 never
+        # serves with the bug and 1.0.1 has it from its first request.
+        ("stop", "payments"),
+        ("set", {"payments.error_rate": 0.25}),
+        ("wait", {"payments.error_rate": 0.25}),
+        ("deploy", "payments", "1.0.1"),
+        # Held from the start of the rollout: 2s stop, 1.01s flags, 8s start.
+        ("sleep", 600 - 11.01),
+        ("clear",),
+        ("wait", {"payments.error_rate": 0}),
+        ("deploy", "payments", "1.0.0"),
+    ]
+    assert h.flags.on() == {}
+    assert h.stack.versions["payments"] == "1.0.0"
+
+
+def test_deploy_manifest(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    h.run(bad_deploy())
+    m = h.manifest()
+    t = steps(m)
+    assert list(t) == [
+        "started",
+        "warmup_started",
+        "deploy_started",
+        "change_events_posted",
+        "old_version_stopped",
+        "fault_set",
+        "fault_applied",
+        "new_version_healthy",
+        "fault_ended",
+        "flags_cleared",
+        "flags_off",
+        "rollback_started",
+        "rollback_healthy",
+    ]
+    assert t["deploy_started"] == "2026-12-01T14:05:00.000Z"
+    assert t["new_version_healthy"] == "2026-12-01T14:05:11.010Z"
+    assert m["window"] == {"start": "2026-12-01T14:00:00.000Z", "end": "2026-12-01T14:15:00.000Z"}
+    assert m["deploy"] == {"service": "payments", "version": {"from": "1.0.0", "to": "1.0.1"}}
+    # As they were when the run started.
+    assert m["versions"] == {"payments": "1.0.0"}
+    assert m["change_events"] == ["payments-bad-deploy-20261201T140000Z.deploy"]
+
+
+def test_deploy_change_event(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    h.run(bad_deploy())
+    (event,) = h.changes.events
+    assert event == {
+        "id": "payments-bad-deploy-20261201T140000Z.deploy",
+        # The start of the rollout, before the old version stopped.
+        "time": steps(h.manifest())["deploy_started"],
+        "kind": "deploy",
+        "environment": "demo",
+        "service": "payments",
+        "attributes": {"version.from": "1.0.0", "version.to": "1.0.1"},
+        "source": "scenario-runner",
+    }
+
+
+def test_deploy_with_change_event_none_posts_nothing(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    result = h.run(bad_deploy(change_event="none"))
+    assert result.status == "completed"
+    assert h.changes.events == []
+    assert ("deploy", "payments", "1.0.1") in h.log
+    m = h.manifest()
+    assert m["change_events"] == []
+    assert "change_events_posted" not in steps(m)
+
+
+def test_deploy_without_fault_flags(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    h.run(bad_deploy(fault={}))
+    assert [e for e in h.log if e[0] in ("set", "stop", "deploy")] == [
+        ("stop", "payments"),
+        ("deploy", "payments", "1.0.1"),
+        ("deploy", "payments", "1.0.0"),
+    ]
+    assert "fault_set" not in steps(h.manifest())
+    assert h.manifest()["window"] is not None
+
+
+def test_ctrl_c_during_the_deploy_hold_rolls_back(tmp_path: Path) -> None:
+    h = Harness(tmp_path, interrupt_on_sleep=2)
+    result = h.run(bad_deploy())
+    assert result.status == "interrupted"
+    assert h.log[-3:] == [
+        ("clear",),
+        ("wait", {"payments.error_rate": 0}),
+        ("deploy", "payments", "1.0.0"),
+    ]
+    assert h.flags.on() == {}
+    assert h.stack.versions["payments"] == "1.0.0"
+    assert "rollback_healthy" in steps(h.manifest())
+
+
+def test_ctrl_c_in_the_warmup_does_not_touch_the_service(tmp_path: Path) -> None:
+    h = Harness(tmp_path, interrupt_on_sleep=1)
+    result = h.run(bad_deploy())
+    assert result.status == "interrupted"
+    assert not any(e[0] in ("stop", "deploy") for e in h.log)
+    m = h.manifest()
+    assert m["window"] is None
+    assert "rollback_started" not in steps(m)
+
+
+def test_ctrl_c_during_the_rollback_still_rolls_back(tmp_path: Path) -> None:
+    h = Harness(tmp_path, interrupt_on_sleep=2)
+    h.stack.interrupts = {"1.0.0": 2}
+    h.run(bad_deploy())
+    assert h.stack.versions["payments"] == "1.0.0"
+    assert "putting payments back on 1.0.0 first" in h.messages
+    assert "rollback_healthy" in steps(h.manifest())
+
+
+def test_failed_post_leaves_the_service_alone(tmp_path: Path) -> None:
+    h = Harness(tmp_path, changes_fail=True)
+    with pytest.raises(RunError, match="503"):
+        h.run(bad_deploy())
+    assert not any(e[0] in ("stop", "deploy") for e in h.log)
+    assert h.stack.versions["payments"] == "1.0.0"
+    assert h.manifest()["status"] == "failed"
+
+
+def test_unhealthy_new_version_clears_and_rolls_back(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    h.stack.fail = {"1.0.1"}
+    with pytest.raises(RunError, match="unhealthy"):
+        h.run(bad_deploy())
+    assert h.flags.on() == {}
+    assert h.log[-1] == ("deploy", "payments", "1.0.0")
+    assert h.stack.versions["payments"] == "1.0.0"
+    m = h.manifest()
+    assert m["status"] == "failed"
+    assert "new_version_healthy" not in steps(m)
+    assert "rollback_healthy" in steps(m)
+
+
+def test_failed_rollback_says_how_to_fix_it(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    h.stack.fail = {"1.0.0"}
+    with pytest.raises(RunError, match=r"PAYMENTS_VERSION=1\.0\.0 docker compose"):
+        h.run(bad_deploy())
+    # The flags are cleared first, whatever happens to the rollback.
+    assert h.flags.on() == {}
+    assert [e for e in h.log if e[0] == "deploy"] == [("deploy", "payments", "1.0.1")] + [
+        ("deploy", "payments", "1.0.0")
+    ] * 3
+    m = h.manifest()
+    assert m["status"] == "completed"
+    assert "rollback_started" in steps(m)
+    assert "rollback_healthy" not in steps(m)
+
+
+def test_refuses_a_deploy_to_the_running_version(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    h.stack.versions["payments"] = "1.0.1"
+    with pytest.raises(ScenarioError, match="payments already runs 1.0.1"):
+        h.run(bad_deploy())
     assert h.log == []
     assert not h.runs.exists()
