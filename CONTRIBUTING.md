@@ -19,6 +19,8 @@ make lint
 make test
 ```
 
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same Makefile targets on every pull request and on pushes to `main`. Each job only runs when files in its area changed; a change to the workflow or the Makefile runs all of them. The `ci` job sums up the rest and is the one to require for merging.
+
 `make up` builds the demo services and starts the local stack (Collector, ClickHouse, flagd, the demo system), see [`deploy/README.md`](deploy/README.md). `make help` lists the other targets.
 
 ## Decisions

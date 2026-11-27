@@ -1,0 +1,168 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read # paths-filter lists the PR's changed files through the API
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Every `uv run` fails if a uv.lock is out of date instead of rewriting it.
+  UV_LOCKED: "1"
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+      python: ${{ steps.filter.outputs.python }}
+      scenarios: ${{ steps.filter.outputs.scenarios }}
+      web: ${{ steps.filter.outputs.web }}
+      loadgen: ${{ steps.filter.outputs.loadgen }}
+      compose: ${{ steps.filter.outputs.compose }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          # A change to the workflow or the Makefile runs every job.
+          filters: |
+            shared: &shared
+              - .github/workflows/ci.yml
+              - Makefile
+            go:
+              - *shared
+              - go.work
+              - go.work.sum
+              - .golangci.yml
+              - changes/**
+              - demo/internal/**
+              - demo/services/gateway/**
+              - demo/services/orders/**
+              - demo/services/payments/**
+            python:
+              - *shared
+              - engine/**
+              - demo/services/catalog/**
+            scenarios:
+              - *shared
+              - bench/**
+            web:
+              - *shared
+              - web/**
+            loadgen:
+              - *shared
+              - demo/loadgen/**
+            compose:
+              - *shared
+              - deploy/**
+
+  go:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.4" # same as the build stage of the demo service images
+          cache-dependency-path: "**/go.sum"
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          install-only: true
+      - run: make lint-go
+      - run: make test-go
+
+  python:
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PY_PROJECTS: engine demo/services/catalog
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.12.13"
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+      - run: make lint-py PY_PROJECTS="$PY_PROJECTS"
+      - run: make test-py PY_PROJECTS="$PY_PROJECTS"
+
+  scenarios:
+    needs: changes
+    if: needs.changes.outputs.scenarios == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.12.13"
+          enable-cache: true
+          cache-dependency-glob: bench/uv.lock
+      - run: make lint-py test-py PY_PROJECTS=bench
+      - run: make check-scenarios
+
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
+      - run: make lint-web
+      - run: make test-web
+
+  loadgen:
+    needs: changes
+    if: needs.changes.outputs.loadgen == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: make test-loadgen
+
+  compose:
+    needs: changes
+    if: needs.changes.outputs.compose == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker compose -f deploy/compose/compose.yaml config --quiet
+      - run: docker compose -f deploy/compose/compose.yaml -f deploy/compose/compose.debug.yaml config --quiet
+
+  # Single check to require in branch protection. Skipped jobs count as passed.
+  ci:
+    needs: [changes, go, python, scenarios, web, loadgen, compose]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
