@@ -52,6 +52,10 @@ jobs:
               - *shared
               - engine/**
               - demo/services/catalog/**
+              # The scenario runner in engine/ loads these, and its tests read them.
+              - bench/**
+              - demo/faults.py
+              - deploy/flags/flags.json
             scenarios:
               - *shared
               - bench/**

@@ -11,6 +11,7 @@ Each scenario is a fault on the [demo system](../demo/README.md) with a known ro
 
 ```sh
 make check-scenarios   # validate every scenario
+make scenario ID=<id>  # run one on the stack, see Running a scenario
 make test-py           # includes the bench tests
 ```
 
@@ -46,13 +47,7 @@ Durations are whole seconds or minutes (`90s`, `5m`). Flag keys and values are t
 
 ### A run
 
-1. Set the `baseline` flags and wait for them to apply.
-2. Let the load generator run for `warmup`.
-3. If there is a `deploy`, restart that service with `SERVICE_VERSION` set to `version` and wait until it is healthy.
-4. Set the `fault` flags, and record the change event if `change_event` asks for one.
-5. Hold for `duration`, then clear every flag and put back the original version.
-
-The window to reconstruct runs from the start of the warmup to the end of the fault. The scenario runner (Phase 1) will do this. Until then it can be done by hand with `make fault` and the commands in [Simulating a deploy](../demo/README.md#simulating-a-deploy).
+A run sets the `baseline` flags, waits for `warmup`, starts the fault, records the change event if `change_event` asks for one, holds the fault for `duration` and then clears every flag. The window to reconstruct runs from the start of the warmup to the end of the fault. [Running a scenario](#running-a-scenario) has the details.
 
 ### Baseline flags
 
@@ -102,6 +97,61 @@ A dependency fault belongs to the service that sees it. In `payments-db-latency`
 | [`orders-pool-exhaustion`](scenarios/orders-pool-exhaustion.yaml) | orders pool 10 to 1, queries at 80 ms | none | orders, `pool_exhaustion` postgres |
 | [`payments-bad-deploy`](scenarios/payments-bad-deploy.yaml) | payments 1.0.1 fails 25% of requests | deploy | payments, `handler_errors` |
 | [`catalog-cpu-burn`](scenarios/catalog-cpu-burn.yaml) | catalog spends 30 ms of CPU per request | none | catalog, `cpu_saturation` |
+
+## Running a scenario
+
+```sh
+make up
+make scenario ID=catalog-cache-disabled
+make scenario ID=catalog-cache-disabled WARMUP=30s DURATION=1m   # shorter, while developing
+```
+
+`make scenario` runs `incidentlens scenario run <id>` from [`engine/`](../engine/). The runner:
+
+1. Checks the scenario as `make check-scenarios` does, and refuses to start unless every service in the stack is running and healthy, the load generator is running and no fault flag is on. It does not touch flags it did not set.
+2. Sets the `baseline` flags and waits until flagd serves them.
+3. Waits for `warmup`.
+4. Sets the `fault` flags. With `change_event: flag` it posts one `flag` change event per fault flag to the [changes API](../changes/README.md), timed when the flags were written. Then it waits until flagd serves them.
+5. Holds the fault for `duration`, counted from when the flags were written.
+6. Clears every flag and waits until flagd serves them off.
+
+Flags are written by `demo/faults.py`, the same code `make fault` runs. Whether flagd serves a value is checked over its OFREP endpoint (port 8016); the services get the same update from flagd's sync stream, usually within a second of the write.
+
+Step 6 also runs on Ctrl-C, on SIGTERM and when a step fails. Further Ctrl-C presses during cleanup do not stop it. If the flags cannot be cleared the runner says so and exits 1; run `make fault-clear` and check `make faults`.
+
+Scenarios with `fault.deploy` (`payments-bad-deploy`) are refused until [#27](https://github.com/dinhostork/IncidentLens/issues/27). By hand, use `make fault` and the commands in [Simulating a deploy](../demo/README.md#simulating-a-deploy).
+
+| Variable | Default | |
+|---|---|---|
+| `CHANGES_URL` | `http://127.0.0.1:8090` | Changes API. |
+| `CHANGES_TOKEN` | unset | Sent as a bearer token when set, as the API's `CHANGES_TOKEN`. |
+| `FLAGD_OFREP_URL` | `http://127.0.0.1:8016` | flagd's OFREP endpoint. |
+
+Exit status: 0 for a completed run, 130 when interrupted, 1 when a step failed, 2 when the runner refused to start.
+
+### The manifest
+
+Each run writes `runs/<scenario id>-<UTC start time>/manifest.json` at the repo root (gitignored). It is written when the run starts, with status `running`, and again at the end. The reasoning behind its contents is in [ADR 0006](../docs/adr/0006-scenario-runs.md).
+
+| Field | |
+|---|---|
+| `schema` | `incidentlens.run/v0` |
+| `id` | Run id, the directory name. |
+| `status` | `completed`, `interrupted`, `failed`, or `running` if the process died without cleaning up. Only completed runs hold the fault for the full duration. |
+| `error` | What failed, for `failed` runs. |
+| `scenario` | `id`, `file` and the `sha256` of the scenario file. |
+| `git` | `commit` and `dirty` (uncommitted or untracked files in the checkout). |
+| `environment` | The demo's `deployment.environment.name`. |
+| `window` | `start` and `end` of the window to reconstruct. `null` if the run stopped before the fault started. |
+| `warmup`, `duration`, `overrides` | Effective values, and the ones given on the command line. |
+| `steps` | Each step with its time: `started`, `baseline_set`, `baseline_applied`, `warmup_started`, `fault_set`, `change_events_posted`, `fault_applied`, `fault_ended`, `flags_cleared`, `flags_off`. Steps that did not happen are left out. |
+| `flags` | `baseline` and `fault` flags from the scenario. |
+| `change_events` | IDs of the change events posted, `<run id>.<flag key>`. |
+| `expected` | Copied from the scenario. |
+| `load` | `LOADGEN_*` from the load generator and `DB_POOL_MAX` per service, as the containers have them. `null` means unset, so the service default of 10. |
+| `versions` | `service.version` of each demo service. |
+
+The window starts at `warmup_started` and ends at `fault_ended`. Times are UTC with millisecond precision.
 
 ## Writing a scenario
 

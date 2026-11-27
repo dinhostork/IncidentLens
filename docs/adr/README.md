@@ -9,5 +9,6 @@ Short records of decisions that would be costly to undo. One file per decision, 
 | [0003](0003-benchmark-first.md) | Build the scenario benchmark before the engine | Accepted |
 | [0004](0004-scenario-format.md) | Scenario format and ground truth | Accepted |
 | [0005](0005-change-events.md) | Change event format and the `changes` table | Accepted |
+| [0006](0006-scenario-runs.md) | Scenario runs and the run manifest | Accepted |
 
 Template: [`template.md`](template.md)

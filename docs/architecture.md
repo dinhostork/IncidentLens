@@ -94,3 +94,5 @@ All services are instrumented with OpenTelemetry SDKs following the [telemetry c
 ## Scenarios (`bench/scenarios/`)
 
 Each scenario is a YAML file describing a fault, how to trigger it and the expected answer: the root cause service, a kind from a closed list, and the symptoms seen on the demo. A scenario can include a change event or deliberately leave it out, since real incidents often have no recorded change. The format is in [`bench/README.md`](../bench/README.md) and [ADR 0004](adr/0004-scenario-format.md).
+
+`incidentlens scenario run` executes a scenario on the compose stack: it sets the flags through flagd, posts the change events and writes a manifest with the window to reconstruct and the expected answer ([ADR 0006](adr/0006-scenario-runs.md)).

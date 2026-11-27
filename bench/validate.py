@@ -40,6 +40,12 @@ def _mapping(loader: _Loader, node: yaml.MappingNode, deep: bool = False) -> dic
 _Loader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
 
 
+def load_file(path: Path) -> object:
+    """Parse a scenario file, rejecting duplicate keys. Raises OSError or yaml.YAMLError."""
+    with path.open() as f:
+        return yaml.load(f, Loader=_Loader)  # a SafeLoader, see above
+
+
 def load_flags(path: Path = FLAGS) -> dict[str, object]:
     """Flag key to its off value."""
     with path.open() as f:
@@ -74,8 +80,7 @@ class Checker:
 
     def check_file(self, path: Path) -> list[str]:
         try:
-            with path.open() as f:
-                doc = yaml.load(f, Loader=_Loader)  # a SafeLoader, see above
+            doc = load_file(path)
         except (OSError, yaml.YAMLError) as e:
             return [str(e)]
         return self.check(doc, path.stem)

@@ -97,7 +97,7 @@ Each service reads `SERVICE_VERSION` at startup. The compose file takes it from 
 PAYMENTS_VERSION=1.0.1 docker compose -f deploy/compose/compose.yaml up -d --wait payments
 ```
 
-New spans from payments then carry `service.version=1.0.1`. Changing behavior together with the version is the scenario runner's job (Phase 1).
+New spans from payments then carry `service.version=1.0.1`. Changing behavior together with the version is the scenario runner's job ([#27](https://github.com/dinhostork/IncidentLens/issues/27)).
 
 ## Faults
 
