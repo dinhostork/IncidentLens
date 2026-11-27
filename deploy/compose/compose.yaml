@@ -1,8 +1,8 @@
 name: incidentlens
 
-# Local stack: Collector -> ClickHouse, flagd for fault flags, the demo system
-# (gateway, catalog, orders, payments, with Postgres and Redis) and a k6 load
-# generator sending baseline traffic to the gateway.
+# Local stack: Collector -> ClickHouse, the change events API, flagd for fault
+# flags, the demo system (gateway, catalog, orders, payments, with Postgres and
+# Redis) and a k6 load generator sending baseline traffic to the gateway.
 # Run from the repo root with `make up`, or:
 #   docker compose -f deploy/compose/compose.yaml up -d --build --wait
 #
@@ -122,12 +122,44 @@ services:
         condition: service_completed_successfully
       clickhouse:
         condition: service_healthy
-      # Not needed by the Collector itself. Something has to depend on the
-      # one-shot init service, or `up --wait` fails when it exits.
+    healthcheck:
+      test: ["CMD", "/probe/busybox", "wget", "-qO-", "http://127.0.0.1:13133/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  # Change events API, see changes/README.md. Not instrumented: it is not part
+  # of the system being observed.
+  changes:
+    build:
+      context: ../../changes
+    image: incidentlens/changes:dev
+    environment:
+      CHANGES_ADDR: ":8090"
+      # Shared token for /v1; empty turns auth off.
+      CHANGES_TOKEN: ${CHANGES_TOKEN:-}
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-incidentlens}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-incidentlens}
+    volumes:
+      - probe:/probe:ro
+    ports:
+      - "127.0.0.1:${CHANGES_PORT:-8090}:8090"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+    depends_on:
+      probe:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
       clickhouse-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "/probe/busybox", "wget", "-qO-", "http://127.0.0.1:13133/"]
+      test: ["CMD", "/probe/busybox", "wget", "-qO-", "http://127.0.0.1:8090/healthz"]
       interval: 5s
       timeout: 3s
       retries: 20

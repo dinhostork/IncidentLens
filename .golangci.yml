@@ -1,5 +1,10 @@
 version: "2"
 
+run:
+  # Lint the tests that only run against a real ClickHouse too.
+  build-tags:
+    - clickhouse
+
 linters:
   default: standard
   enable:

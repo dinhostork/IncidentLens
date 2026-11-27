@@ -190,3 +190,37 @@ func flag(f func(map[string]any)) func(map[string]any) {
 		f,
 	)
 }
+
+func TestProblems(t *testing.T) {
+	ev := baseEvent(t)
+	delAttr("version.to")(ev)
+	set("received_at", "2026-12-01T14:03:13Z")(ev)
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := Problems(Validate(data))
+	want := map[string]bool{"": false, "/attributes": false}
+	for _, p := range got {
+		if p.Message == "" {
+			t.Errorf("empty message at %q", p.Location)
+		}
+		if _, ok := want[p.Location]; ok {
+			want[p.Location] = true
+		}
+	}
+	for loc, seen := range want {
+		if !seen {
+			t.Errorf("no problem reported at %q: %+v", loc, got)
+		}
+	}
+	if Problems(errors.New("not a validation error")) != nil {
+		t.Error("want nil for an error that is not a validation error")
+	}
+}
+
+func TestJSONPointerEscaping(t *testing.T) {
+	if got := jsonPointer([]string{"attributes", "a/b~c"}); got != "/attributes/a~1b~0c" {
+		t.Errorf("got %q", got)
+	}
+}
