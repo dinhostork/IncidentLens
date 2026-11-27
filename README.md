@@ -1,4 +1,5 @@
 # IncidentLens
+[![CI](https://github.com/dinhostork/IncidentLens/actions/workflows/ci.yml/badge.svg)](https://github.com/dinhostork/IncidentLens/actions/workflows/ci.yml)
 
 Reconstruct production incidents from telemetry and change events.
 
