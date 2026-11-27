@@ -7,7 +7,7 @@ Pick a time window and IncidentLens builds a timeline of what happened, shows ho
 
 > **Status:** early development. The lab runs, the analysis does not exist yet.
 >
-> `make up` starts the local stack (Collector, ClickHouse, flagd, changes API), the [demo shop](demo/README.md) and a load generator. Faults are switched on with `make fault`, and the five [benchmark scenarios](bench/README.md) each produce a visible change in latency or errors on their target service. The [change events API](changes/README.md) records deploys, config changes and flag flips. The engine and the UI are still empty skeletons. See the [roadmap](docs/ROADMAP.md) for what comes next.
+> `make up` starts the local stack (Collector, ClickHouse, flagd, changes API), the [demo shop](demo/README.md) and a load generator. Faults are switched on with `make fault`, and the five [benchmark scenarios](bench/README.md) each produce a visible change in latency or errors on their target service. `make scenario ID=<id>` runs one and records its window and expected answer (deploy scenarios still by hand). The [change events API](changes/README.md) records deploys, config changes and flag flips. The engine has no analysis yet and the UI is an empty skeleton. See the [roadmap](docs/ROADMAP.md) for what comes next.
 
 ## Why
 

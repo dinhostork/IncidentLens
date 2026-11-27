@@ -65,9 +65,13 @@ fault-clear: ## Turn demo faults off (FLAG="flag ..." for some, all by default)
 
 ## Scenarios
 
-.PHONY: check-scenarios
+.PHONY: check-scenarios scenario
 check-scenarios: ## Validate the benchmark scenario files
 	cd bench && uv run --locked validate.py
+
+scenario: ## Run a scenario on the stack: make scenario ID=payments-db-latency [WARMUP=30s DURATION=1m]
+	@test -n "$(ID)" || { echo 'usage: make scenario ID=<scenario id> [WARMUP=30s] [DURATION=1m]' >&2; exit 2; }
+	@uv run --quiet --project engine incidentlens scenario run $(ID) $(if $(WARMUP),--warmup $(WARMUP)) $(if $(DURATION),--duration $(DURATION))
 
 ## Setup
 
