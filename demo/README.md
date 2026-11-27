@@ -122,7 +122,7 @@ Keys are `<service>.<fault>[.<dependency>]`. A dependency is another service (`c
 | `error_rate.<dep>` | 0 to 1 | calls to `<dep>` | Fails that fraction of calls as if the connection was dropped. |
 | `error_rate` | 0 to 1 | the service's own requests | Fails that fraction of requests with a 500, as a bug in the handler would. |
 | `cpu_burn_ms` | milliseconds | the service's own requests | Keeps a CPU busy for that long per request. In catalog this blocks the event loop, so every request in flight waits. |
-| `pool_size` | connections, 0 = as configured | the Postgres pool | Caps the connections in use at once, so normal load can exhaust the pool. |
+| `pool_size` | connections, 0 = as configured | the Postgres pool | Caps the connections in use at once. Demo queries take under a millisecond, so this only runs the pool out when queries are also slow (see `orders-pool-exhaustion` in [`bench/`](../bench/README.md)). |
 | `cache_disabled` | `true` / `false` | catalog only | Skips the Redis cache. Every read goes to Postgres and Redis is not called. |
 
 The flags each service has:

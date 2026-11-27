@@ -1,13 +1,13 @@
 # Run `make help` for the list of targets.
 
 GO_MODULES := changes demo/internal demo/services/gateway demo/services/orders demo/services/payments
-PY_PROJECTS := engine demo/services/catalog
+PY_PROJECTS := engine demo/services/catalog bench
 
 .DEFAULT_GOAL := help
 
 .PHONY: help
 help: ## Show this help
-	@grep -hE '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
+	@grep -hE '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
 
 ## Local stack
 
@@ -58,6 +58,12 @@ fault: ## Turn demo faults on: make fault SET="payments.latency_ms.postgres=800 
 
 fault-clear: ## Turn demo faults off (FLAG="flag ..." for some, all by default)
 	@$(FAULTS) clear $(FLAG)
+
+## Scenarios
+
+.PHONY: check-scenarios
+check-scenarios: ## Validate the benchmark scenario files
+	cd bench && uv run --locked validate.py
 
 ## Setup
 

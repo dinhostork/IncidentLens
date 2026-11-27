@@ -1,0 +1,29 @@
+id: payments-bad-deploy
+description: >
+  payments 1.0.1 goes out with a bug that fails about a quarter of its
+  requests with a 500. orders marks those orders payment_failed and returns
+  502, and the checkout route on the gateway fails with it.
+warmup: 5m
+fault:
+  deploy:
+    service: payments
+    version: 1.0.1
+  # What 1.0.1 does wrong. Set once the new version is up, never recorded as a
+  # flag change.
+  flags:
+    payments.error_rate: 0.25
+  duration: 10m
+change_event: deploy
+expected:
+  root_cause:
+    service: payments
+    kind: handler_errors
+  # Only checkouts reach payments, so the gateway's overall error ratio stays
+  # under 1%. Its checkout route fails at about the payments rate.
+  symptoms:
+    - service: payments
+      signal: errors
+    - service: orders
+      signal: errors
+    - service: gateway
+      signal: errors

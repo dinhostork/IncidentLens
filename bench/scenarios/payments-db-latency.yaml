@@ -1,0 +1,24 @@
+id: payments-db-latency
+description: >
+  Queries from payments to Postgres take 800 ms longer. Only payments sees it:
+  orders and catalog use the same Postgres and stay fast.
+warmup: 5m
+fault:
+  flags:
+    payments.latency_ms.postgres: 800
+  duration: 10m
+change_event: none
+expected:
+  root_cause:
+    service: payments
+    kind: dependency_latency
+    dependency: postgres
+  # Checkout is about 2% of gateway requests, so the gateway's overall p95
+  # does not move. The checkout route and the gateway -> orders edge do.
+  symptoms:
+    - service: payments
+      signal: latency
+    - service: orders
+      signal: latency
+    - service: gateway
+      signal: latency

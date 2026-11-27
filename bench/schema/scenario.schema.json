@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dinhostork/IncidentLens/blob/main/bench/schema/scenario.schema.json",
+  "title": "IncidentLens benchmark scenario",
+  "description": "One fault on the demo system and the answer the engine should reach. See bench/README.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "description", "warmup", "fault", "change_event", "expected"],
+  "properties": {
+    "id": {
+      "description": "Same as the file name without .yaml.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "description": {
+      "description": "What goes wrong, in one or two sentences.",
+      "type": "string",
+      "minLength": 1
+    },
+    "warmup": {
+      "description": "How long the system runs with the baseline flags before the fault starts.",
+      "$ref": "#/$defs/duration"
+    },
+    "baseline": {
+      "description": "Flags set before the warmup and left on until the end. They are part of normal behavior in this scenario, not part of the fault, and are never recorded as changes.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["flags"],
+      "properties": {
+        "flags": { "$ref": "#/$defs/flags" }
+      }
+    },
+    "fault": {
+      "description": "What changes when the fault starts. A deploy happens first; the flags are set once the new version is up.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["duration"],
+      "anyOf": [{ "required": ["flags"] }, { "required": ["deploy"] }],
+      "properties": {
+        "flags": { "$ref": "#/$defs/flags" },
+        "deploy": {
+          "description": "Restart a service with a new service.version.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["service", "version"],
+          "properties": {
+            "service": { "$ref": "#/$defs/name" },
+            "version": { "type": "string", "minLength": 1 }
+          }
+        },
+        "duration": {
+          "description": "How long the fault stays on.",
+          "$ref": "#/$defs/duration"
+        }
+      }
+    },
+    "change_event": {
+      "description": "What the runner records as a change event when the fault starts: nothing, one flag change per fault flag, or the deploy.",
+      "enum": ["none", "flag", "deploy"]
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root_cause", "symptoms"],
+      "properties": {
+        "root_cause": { "$ref": "#/$defs/root_cause" },
+        "symptoms": {
+          "description": "Services whose own requests change, and how. Measured on the demo at the default load.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["service", "signal"],
+            "properties": {
+              "service": { "$ref": "#/$defs/name" },
+              "signal": { "enum": ["latency", "errors"] }
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "required": ["change_event"], "properties": { "change_event": { "const": "deploy" } } },
+      "then": { "properties": { "fault": { "required": ["deploy"] } } }
+    },
+    {
+      "if": { "required": ["change_event"], "properties": { "change_event": { "const": "flag" } } },
+      "then": { "properties": { "fault": { "required": ["flags"], "not": { "required": ["deploy"] } } } }
+    }
+  ],
+  "$defs": {
+    "duration": {
+      "description": "Whole seconds or minutes: 90s, 5m.",
+      "type": "string",
+      "pattern": "^[1-9][0-9]*[sm]$"
+    },
+    "name": {
+      "description": "A service.name, or postgres / redis for a dependency.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "flags": {
+      "description": "Demo fault flags, key to value. Keys and values are checked against deploy/flags/flags.json by validate.py.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*\\.[a-z_]+(\\.[a-z][a-z0-9-]*)?$" },
+      "additionalProperties": { "type": ["boolean", "number"] }
+    },
+    "root_cause": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "kind"],
+      "properties": {
+        "service": {
+          "description": "The service whose behavior changed first.",
+          "$ref": "#/$defs/name"
+        },
+        "kind": {
+          "description": "What went wrong there. See bench/README.md for each value.",
+          "enum": [
+            "dependency_latency",
+            "dependency_errors",
+            "pool_exhaustion",
+            "cache_disabled",
+            "cpu_saturation",
+            "handler_errors"
+          ]
+        },
+        "dependency": {
+          "description": "The dependency the problem is about, for the kinds that have one.",
+          "$ref": "#/$defs/name"
+        }
+      },
+      "if": {
+        "properties": {
+          "kind": { "enum": ["dependency_latency", "dependency_errors", "pool_exhaustion", "cache_disabled"] }
+        }
+      },
+      "then": { "required": ["dependency"] },
+      "else": { "not": { "required": ["dependency"] } }
+    }
+  }
+}

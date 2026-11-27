@@ -1,0 +1,30 @@
+[project]
+name = "incidentlens-bench"
+version = "0.0.0"
+description = "Benchmark scenarios for IncidentLens and the script that validates them."
+requires-python = ">=3.12"
+dependencies = [
+  "jsonschema>=4.25",
+  "pyyaml>=6.0.2",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=9",
+  "ruff>=0.17",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = ["-ra", "--strict-markers"]

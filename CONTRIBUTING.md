@@ -27,4 +27,4 @@ If a change affects storage, data formats, or how the engine reaches a conclusio
 
 ## Scenarios
 
-New fault scenarios are very welcome, especially ones based on incidents you have seen in real systems. A scenario needs a clear description, a way to trigger it in the demo system and the expected root cause.
+New fault scenarios are very welcome, especially ones based on incidents you have seen in real systems. A scenario needs a clear description, a way to trigger it in the demo system and the expected root cause. The format and how to check that a fault really shows up are in [`bench/README.md`](bench/README.md); `make check-scenarios` validates the files.

@@ -1,0 +1,29 @@
+id: catalog-cache-disabled
+description: >
+  A flag turns off catalog's Redis cache. Every product read goes to Postgres,
+  which takes about 17 ms per query against under 1 ms from Redis.
+warmup: 5m
+# The demo's Postgres answers in about 1.5 ms, which would make the cache
+# pointless. Slowing catalog's queries to a realistic speed for the whole run
+# is what gives the cache something to save. With the cache on, only about one
+# read per second misses it, so the baseline barely notices.
+baseline:
+  flags:
+    catalog.latency_ms.postgres: 15
+fault:
+  flags:
+    catalog.cache_disabled: true
+  duration: 10m
+change_event: flag
+expected:
+  root_cause:
+    service: catalog
+    kind: cache_disabled
+    dependency: redis
+  symptoms:
+    - service: catalog
+      signal: latency
+    - service: orders
+      signal: latency
+    - service: gateway
+      signal: latency

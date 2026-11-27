@@ -1,0 +1,32 @@
+id: orders-pool-exhaustion
+description: >
+  orders' Postgres pool drops from 10 connections to 1. Its queries take about
+  80 ms, so one connection cannot keep up: requests queue for a connection,
+  some time out, and db.client.connection.count sits at the new maximum.
+warmup: 5m
+# Demo queries take under a millisecond, and at that speed even one
+# connection is enough for the default load. Slower queries for the whole run
+# (orders around 250 ms p50, still healthy with 10 connections) are what make
+# a smaller pool matter.
+baseline:
+  flags:
+    orders.latency_ms.postgres: 80
+fault:
+  flags:
+    orders.pool_size: 1
+  duration: 10m
+change_event: none
+expected:
+  root_cause:
+    service: orders
+    kind: pool_exhaustion
+    dependency: postgres
+  symptoms:
+    - service: orders
+      signal: latency
+    - service: orders
+      signal: errors
+    - service: gateway
+      signal: latency
+    - service: gateway
+      signal: errors
