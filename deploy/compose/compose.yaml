@@ -1,7 +1,8 @@
 name: incidentlens
 
-# Local stack: Collector -> ClickHouse, flagd for fault flags, and the demo
-# system (gateway, catalog, orders, payments, with Postgres and Redis).
+# Local stack: Collector -> ClickHouse, flagd for fault flags, the demo system
+# (gateway, catalog, orders, payments, with Postgres and Redis) and a k6 load
+# generator sending baseline traffic to the gateway.
 # Run from the repo root with `make up`, or:
 #   docker compose -f deploy/compose/compose.yaml up -d --build --wait
 #
@@ -256,6 +257,30 @@ services:
       flagd:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+
+  # Baseline traffic through the gateway, see demo/loadgen/README.md. k6's own
+  # metrics are not exported anywhere.
+  loadgen:
+    image: grafana/k6:2.4.0
+    command: ["run", "--quiet", "--no-color", "--summary-mode=disabled", "/loadgen/script.js"]
+    environment:
+      K6_NO_USAGE_REPORT: "true"
+      GATEWAY_URL: http://gateway:8080
+      LOADGEN_RPS: ${LOADGEN_RPS:-20}
+      LOADGEN_WAVE_MINUTES: ${LOADGEN_WAVE_MINUTES:-60}
+      LOADGEN_WAVE_AMPLITUDE: ${LOADGEN_WAVE_AMPLITUDE:-0.2}
+      LOADGEN_JITTER: ${LOADGEN_JITTER:-0.1}
+    volumes:
+      - ../../demo/loadgen:/loadgen:ro
+    restart: unless-stopped
+    stop_grace_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    depends_on:
+      gateway:
         condition: service_healthy
 
   # Sends a few test spans to the Collector. Used by `make smoke`.

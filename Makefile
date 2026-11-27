@@ -82,14 +82,17 @@ lint-web: ## eslint and type check
 
 ## Test
 
-.PHONY: test test-go test-py test-web
-test: test-go test-py test-web ## Run all tests
+.PHONY: test test-go test-py test-loadgen test-web
+test: test-go test-py test-loadgen test-web ## Run all tests
 
 test-go: ## go test on every Go module
 	@for m in $(GO_MODULES); do echo "==> $$m"; (cd $$m && go test ./...) || exit 1; done
 
 test-py: ## pytest
 	@for p in $(PY_PROJECTS); do echo "==> $$p"; (cd $$p && uv run pytest) || exit 1; done
+
+test-loadgen: ## Tests for the load generator's rate model (Node)
+	cd demo/loadgen && node --test
 
 test-web: ## Production build of the web app (no unit tests yet)
 	cd web && pnpm build
