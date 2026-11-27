@@ -97,20 +97,72 @@ PAYMENTS_VERSION=1.0.1 docker compose -f deploy/compose/compose.yaml up -d --wai
 
 New spans from payments then carry `service.version=1.0.1`. Changing behavior together with the version is the scenario runner's job (Phase 1).
 
-## Fault hooks
+## Faults
 
-Fault injection is not wired up yet. The place for it is a single hook that every inbound request and every outbound call passes through before it runs:
+Faults are switched on with flags in flagd. Each service reads its flags through the OpenFeature SDK on every request and every outbound call, so a change applies within a second or two, without a restart.
 
-- Go: `fault.Hook` in [`internal/fault`](internal/fault/fault.go). It is called by the route wrapper in `internal/httpx` (inbound), by the HTTP client transport (outbound, per callee) and by `internal/pg` (outbound, `postgres`). The services build it in one place, `internal/service`, and currently use `fault.Nop`.
-- Python: `Hook` in [`catalog/fault.py`](services/catalog/src/catalog/fault.py), called by a router dependency (inbound) and by `catalog/clients.py` for Postgres and Redis. Built in `catalog/main.py`, currently `Nop`.
+```sh
+make fault SET="payments.latency_ms.postgres=800"    # one or more flag=value pairs
+make faults                                          # what is on
+make fault-clear FLAG=payments.latency_ms.postgres   # one off
+make fault-clear                                     # all off
+```
 
-Outbound hooks run inside the client span, so a delay or an error injected on `payments -> postgres` looks like a slow or failing Postgres from payments' side, not like a problem in payments itself.
+`make fault` and friends call [`faults.py`](faults.py) (`uv run demo/faults.py --help`). [`deploy/flags/flags.json`](../deploy/flags/flags.json) defines every flag, all off. flagd serves `deploy/flags/active.json`, a copy that the script rewrites atomically and that git ignores, so turning faults on and off never touches a tracked file. `make up` creates it if it is missing.
+
+### Flags
+
+Keys are `<service>.<fault>[.<dependency>]`. A dependency is another service (`catalog`, `orders`, `payments`) or `postgres` / `redis`.
+
+| Fault | Value | Applies to | What it does |
+|---|---|---|---|
+| `latency_ms.<dep>` | milliseconds | calls to `<dep>` | Waits before the call. A caller with a timeout gives up as usual (orders to payments times out at 3s). |
+| `error_rate.<dep>` | 0 to 1 | calls to `<dep>` | Fails that fraction of calls as if the connection was dropped. |
+| `error_rate` | 0 to 1 | the service's own requests | Fails that fraction of requests with a 500, as a bug in the handler would. |
+| `cpu_burn_ms` | milliseconds | the service's own requests | Keeps a CPU busy for that long per request. In catalog this blocks the event loop, so every request in flight waits. |
+| `pool_size` | connections, 0 = as configured | the Postgres pool | Caps the connections in use at once, so normal load can exhaust the pool. |
+| `cache_disabled` | `true` / `false` | catalog only | Skips the Redis cache. Every read goes to Postgres and Redis is not called. |
+
+The flags each service has:
+
+| Service | Flags |
+|---|---|
+| `gateway` | `cpu_burn_ms`, `error_rate`, `latency_ms.{catalog,orders}`, `error_rate.{catalog,orders}` |
+| `catalog` | `cpu_burn_ms`, `error_rate`, `latency_ms.{postgres,redis}`, `error_rate.{postgres,redis}`, `pool_size`, `cache_disabled` |
+| `orders` | `cpu_burn_ms`, `error_rate`, `latency_ms.{catalog,payments,postgres}`, `error_rate.{catalog,payments,postgres}`, `pool_size` |
+| `payments` | `cpu_burn_ms`, `error_rate`, `latency_ms.postgres`, `error_rate.postgres`, `pool_size` |
+
+`flags.json` has exactly these 28 keys; a test in `internal/fault` checks that against the services' dependencies.
+
+### How faults show up
+
+Injected faults are meant to look like the real thing in the telemetry, so the engine cannot spot them by an error type or message no real failure would produce.
+
+- Outbound faults run inside the caller's client span. Latency on `payments -> postgres` is a slow Postgres from payments' side, not slowness in payments.
+- Postgres faults run once the connection has been taken from the pool, so injected latency holds the connection like a slow query does. With enough of it the pool runs out even without `pool_size`, and `db.client.connection.count` shows the connections in use.
+- `pool_size` also lowers `db.client.connection.max`, as a smaller pool would. pgxpool and asyncpg pools cannot be resized, so a limiter in front of the pool enforces the cap and callers over it wait.
+- Dropped connections fail with the error the client library would give: `read tcp payments:8080: read: connection reset by peer` (Go, HTTP and Postgres), asyncpg's `ConnectionDoesNotExistError` (SQLSTATE 08003) and redis-py's `ConnectionError` in catalog.
+- Latency on catalog's Redis calls stops at the client's 0.5s socket timeout with redis-py's `TimeoutError`, then catalog falls back to Postgres.
+- Handler failures log `handler failed` with a nil pointer dereference (Go) or an `AttributeError` (Python).
+- Nothing about the flags reaches the telemetry. The flagd connection is not instrumented, the provider logs to stderr only, and the Go services drop the spans flagd's evaluator would otherwise create (`internal/telemetry`). `make smoke` fails if spans from any other instrumentation scope, or provider log records, show up.
+
+### Where it plugs in
+
+Every inbound request and outbound call passes through one hook before it runs:
+
+- Go: `fault.Hook` in [`internal/fault`](internal/fault/fault.go). The route wrapper in `internal/httpx` calls it for inbound requests, the HTTP client transport for calls to other services, and `internal/pg` for Postgres. `internal/service` builds the flag-driven `fault.Injector` from `OTEL_SERVICE_NAME`.
+- Python: `Hook` in [`catalog/fault.py`](services/catalog/src/catalog/fault.py), called by a router dependency (inbound) and by `catalog/clients.py` for Postgres and Redis. `catalog/main.py` builds the `Injector`.
+
+The providers run flagd's in-process resolver: they sync the flag definitions from flagd (`FLAGD_HOST`, port 8015) and evaluate locally. An evaluation never waits on the network, flags read as off until the first sync, and if flagd goes away the last synced values stay in effect until it is back.
+
+"Bad deploy" faults, where `SERVICE_VERSION` and behavior change together, belong to the scenario runner (Phase 1).
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `internal/` | Go module shared by the Go services: telemetry setup, HTTP server and client, traced Postgres pool, fault hook |
+| `internal/` | Go module shared by the Go services: telemetry setup, HTTP server and client, traced Postgres pool, fault injection |
+| `faults.py` | Turns faults on and off (`make fault`) |
 | `services/<name>/` | One directory per service, each with its own Dockerfile. Go services are separate modules that use `internal/` through a `replace` directive. |
 | `smoke.sh` | End-to-end check used by `make smoke` |
 | `loadgen/` | k6 load generator (not there yet) |

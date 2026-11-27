@@ -8,12 +8,18 @@ name: incidentlens
 # The Collector, flagd and Go service images have no shell or HTTP client, so
 # their health checks run a static busybox copied into a shared volume by the
 # `probe` service.
+#
+# flagd serves deploy/flags/active.json, the fault flags currently in effect.
+# `make up` creates it from flags.json (all faults off); without make, run
+# `uv run demo/faults.py init` first.
 
 # Settings shared by the demo services. See docs/telemetry-conventions.md.
 x-demo-env: &demo-env
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
   OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=demo,service.namespace=shop
   OTEL_METRIC_EXPORT_INTERVAL: "10000"
+  # Fault flags, synced from flagd's sync service (port 8015).
+  FLAGD_HOST: flagd
 
 x-demo-service: &demo-service
   restart: unless-stopped
@@ -98,7 +104,7 @@ services:
 
   flagd:
     image: ghcr.io/open-feature/flagd:v0.18.2
-    command: ["start", "--uri", "file:/etc/flagd/flags.json"]
+    command: ["start", "--uri", "file:/etc/flagd/active.json"]
     volumes:
       - probe:/probe:ro
       - ../flags:/etc/flagd:ro
@@ -169,6 +175,8 @@ services:
         condition: service_completed_successfully
       otel-collector:
         condition: service_healthy
+      flagd:
+        condition: service_healthy
       catalog:
         condition: service_healthy
       orders:
@@ -195,6 +203,8 @@ services:
         condition: service_completed_successfully
       otel-collector:
         condition: service_healthy
+      flagd:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -218,6 +228,8 @@ services:
         condition: service_completed_successfully
       otel-collector:
         condition: service_healthy
+      flagd:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       catalog:
@@ -240,6 +252,8 @@ services:
       probe:
         condition: service_completed_successfully
       otel-collector:
+        condition: service_healthy
+      flagd:
         condition: service_healthy
       postgres:
         condition: service_healthy

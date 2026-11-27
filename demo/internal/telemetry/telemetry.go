@@ -54,7 +54,7 @@ func Setup(ctx context.Context) (shutdown func(context.Context) error, err error
 	}
 	tp := sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithBatcher(spanExp))
 	shutdowns = append(shutdowns, tp.Shutdown)
-	otel.SetTracerProvider(tp)
+	otel.SetTracerProvider(scopeFilter{tp: tp, drop: droppedScopes})
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{}, propagation.Baggage{},
 	))

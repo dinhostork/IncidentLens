@@ -39,3 +39,7 @@ out/
 next-env.d.ts
 .pnpm-debug.log*
 npm-debug.log*
+
+# Fault flags currently in effect, written by demo/faults.py
+/deploy/flags/active.json
+/deploy/flags/.active-*

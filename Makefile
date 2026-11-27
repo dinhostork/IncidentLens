@@ -20,6 +20,7 @@ CH_QUERY = $(COMPOSE) exec -T clickhouse clickhouse-client --query
 
 .PHONY: up down reset ps logs smoke
 up: ## Build the demo services, start the stack and wait until it is healthy (DEBUG=1 adds the debug exporter)
+	@$(FAULTS) init
 	$(COMPOSE) up -d --build --wait
 
 down: ## Stop the local stack, keep data
@@ -42,6 +43,21 @@ smoke: ## Check that test spans and a demo checkout flow reach ClickHouse
 	  sleep 1; \
 	done; echo "smoke: no spans reached otel.otel_traces after 30s" >&2; exit 1
 	@COMPOSE="$(COMPOSE)" demo/smoke.sh
+
+## Faults
+
+FAULTS := uv run --quiet demo/faults.py
+
+.PHONY: faults fault fault-clear
+faults: ## List the demo faults that are on
+	@$(FAULTS) list
+
+fault: ## Turn demo faults on: make fault SET="payments.latency_ms.postgres=800 ..."
+	@test -n "$(SET)" || { echo 'usage: make fault SET="flag=value ..."' >&2; exit 2; }
+	@$(FAULTS) set $(SET)
+
+fault-clear: ## Turn demo faults off (FLAG="flag ..." for some, all by default)
+	@$(FAULTS) clear $(FLAG)
 
 ## Setup
 

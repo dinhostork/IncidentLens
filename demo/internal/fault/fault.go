@@ -3,10 +3,10 @@
 // Every inbound request and every outbound call (HTTP or database) passes
 // through Hook.Before before it runs. The hook can delay the call by blocking
 // or fail it by returning an error. The services only ever see the Hook
-// interface, so the flag-driven implementation can replace Nop without
-// touching handlers.
+// interface. Injector is the implementation driven by flags in flagd, Nop
+// the one that does nothing.
 //
-// Injected failures should look like real ones (a timeout, a refused
+// Injected failures should look like real ones (a timeout, a reset
 // connection, a 500), so the engine cannot tell them apart by error type or
 // message.
 package fault
@@ -38,12 +38,19 @@ type Point struct {
 	Dependency string
 	// Operation is the HTTP route or the database operation, for context.
 	Operation string
+	// Address is the dependency's host:port for outbound calls. Injected
+	// errors use it so they read like real network errors.
+	Address string
 }
 
-// Hook runs before every inbound request and outbound call. A non-nil error
-// fails the call as if the dependency (or the handler) had failed.
+// Hook decides which faults apply to a service.
 type Hook interface {
+	// Before runs before every inbound request and outbound call. A non-nil
+	// error fails the call as if the dependency (or the handler) had failed.
 	Before(ctx context.Context, p Point) error
+	// PoolSize returns how many database connections the service may use at
+	// once, or 0 to use the pool as configured.
+	PoolSize(ctx context.Context) int
 }
 
 // Nop is a Hook that never injects anything.
@@ -51,3 +58,6 @@ type Nop struct{}
 
 // Before implements Hook.
 func (Nop) Before(context.Context, Point) error { return nil }
+
+// PoolSize implements Hook.
+func (Nop) PoolSize(context.Context) int { return 0 }
