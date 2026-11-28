@@ -8,10 +8,12 @@ Each scenario is a fault on the [demo system](../demo/README.md) with a known ro
 | `schema/scenario.schema.json` | JSON Schema for a scenario file |
 | `validate.py` | Checks files against the schema and against the demo's flags |
 | `tests/` | Tests for the validator, plus one test per scenario file |
+| `recordings.sha256` | Recorded runs published for CI and the engine's tests, see [Recordings](#recordings) |
 
 ```sh
 make check-scenarios   # validate every scenario
 make scenario ID=<id>  # run one on the stack, see Running a scenario
+make record RUN=<run id>  # save a run's telemetry to files, see Recordings
 make test-py           # includes the bench tests
 ```
 
@@ -155,6 +157,70 @@ Each run writes `runs/<scenario id>-<UTC start time>/manifest.json` at the repo 
 | `versions` | `service.version` of each demo service when the run started. |
 
 The window starts at `warmup_started` and ends at `fault_ended`. For a deploy it includes the restart. Times are UTC with millisecond precision.
+
+## Recordings
+
+A run takes 15 minutes and the whole stack. A recording keeps what it produced so it can be loaded again without either: the telemetry and change events of the run's window, plus a margin before it, filtered to the run's environment. The format and the reasons for it are in [ADR 0008](../docs/adr/0008-recorded-runs.md).
+
+```sh
+make record RUN=payments-db-latency-20261128T142637Z           # writes recordings/<run id>/
+make record RUN=payments-db-latency-20261128T142637Z MARGIN=5m # shorter margin
+make load-recording REC=recordings/payments-db-latency-20261128T142637Z  # prints the database name
+```
+
+`make record` runs `incidentlens recording save`. `RUN` is a run id under `runs/`, or a path to a run directory. It refuses to start when:
+
+- the run has no window (it stopped before the fault started)
+- another run under `runs/` has steps inside the range, since its fault would end up in this recording's margin. Leave at least the margin between runs, or pass a shorter one.
+- the tables in ClickHouse do not have the columns in [`engine/src/incidentlens/recording/tables.json`](../engine/src/incidentlens/recording/tables.json), which is what the engine is written against
+
+It waits until 30 seconds after the end of the window before exporting, so telemetry still in the SDKs' and the Collector's buffers is included. Save soon after the run: the stack keeps telemetry for 3 days.
+
+`make load-recording` runs `incidentlens recording load`. It creates a database named `rec_<run id>` (`DB=` to pick another), creates the recorded tables in it without their TTL, inserts the files and checks that each table has the recorded row count and checksum. If anything does not match, the database is dropped. An existing database is not touched unless `--replace` is passed. Every table goes in the one database, `changes` included, so the engine reads a loaded recording by pointing both its telemetry and its change events at that database.
+
+| Variable | Default | |
+|---|---|---|
+| `CLICKHOUSE_URL` | `http://127.0.0.1:8123` | ClickHouse HTTP interface. Loading does not need the rest of the stack; CI loads into a ClickHouse container of the stack's version. |
+| `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD` | `incidentlens` | |
+
+Exit status: 0 on success, 2 when it refused to start, 1 when a query failed or the data did not match, 130 when interrupted.
+
+### What a recording holds
+
+```
+recordings/<run id>/
+  recording.json
+  otel_traces.native.zst
+  otel_traces_trace_id_ts.native.zst
+  otel_logs.native.zst
+  otel_metrics_{gauge,sum,histogram,exponential_histogram,summary}.native.zst
+  changes.native.zst
+```
+
+Each data file is one table in ClickHouse's Native format, compressed with zstd. An empty table is an empty file.
+
+| Field of `recording.json` | |
+|---|---|
+| `schema` | `incidentlens.recording/v0` |
+| `id` | The run id. |
+| `created` | When it was saved. |
+| `environment` | The run's environment, which every row was filtered on. |
+| `range` | `start` and `end` of what was exported: the run's window with `margin` before it. |
+| `margin` | |
+| `source` | Versions of the ClickHouse and the Collector it was saved from. |
+| `columns_sha256` | SHA-256 of the columns of every table, as in `tables.json`. |
+| `tables` | Per table: `source` (database and table on the stack), `file`, `rows`, `checksum` (sum of `cityHash64` over every exported column, which does not depend on row order), `bytes` and `sha256` of the file, `columns`, and `create`, the table's `CREATE` statement on the stack. |
+| `run` | The run's manifest, unchanged. |
+
+Times are not shifted: a loaded recording has the same timestamps as the run, so the manifest's window applies to it as it is.
+
+### Published recordings
+
+`bench/recordings.sha256` lists recordings published as assets of a GitHub release, one tar file per recording. `make fetch-recordings` downloads them into `recordings/`, checks their SHA-256 and unpacks them. `make check-recordings` also loads each one, as CI does.
+
+To publish a new set: run the scenarios with at least the margin between runs, save each one, `tar -cf <run id>.tar -C recordings <run id>`, upload the tar files to a new release, and update `recordings.sha256` and `RECORDINGS_URL` in the Makefile.
+
+After a Collector upgrade changes the exporter's tables, `make record` refuses until `tables.json` is updated (`uv run --project engine incidentlens recording tables` prints it from the running ClickHouse), and recordings made before then no longer load. Record the scenarios again and publish them.
 
 ## Writing a scenario
 

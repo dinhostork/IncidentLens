@@ -201,6 +201,13 @@ class ComposeStack:
             env[service] = dict(e.split("=", 1) for e in c["Config"].get("Env") or [])
         return env
 
+    def image(self, service: str) -> str:
+        """The image a service's container runs, such as the pinned Collector release."""
+        row = self._ps(service).get(service)
+        if row is None:
+            raise ScenarioError(f"{service} is not created")
+        return row["Image"]
+
     def stop(self, service: str) -> None:
         try:
             self._run([*self._compose, "stop", service])

@@ -73,6 +73,36 @@ scenario: ## Run a scenario on the stack: make scenario ID=payments-db-latency [
 	@test -n "$(ID)" || { echo 'usage: make scenario ID=<scenario id> [WARMUP=30s] [DURATION=1m]' >&2; exit 2; }
 	@uv run --quiet --project engine incidentlens scenario run $(ID) $(if $(WARMUP),--warmup $(WARMUP)) $(if $(DURATION),--duration $(DURATION))
 
+## Recordings
+
+# Release that holds the recordings listed in bench/recordings.sha256.
+RECORDINGS_URL := https://github.com/dinhostork/IncidentLens/releases/download/recordings-2026-11-28
+RECORDING := uv run --quiet --project engine incidentlens recording
+
+.PHONY: record load-recording fetch-recordings check-recordings
+record: ## Save a scenario run to recordings/<run id>: make record RUN=<run id> [MARGIN=10m]
+	@test -n "$(RUN)" || { echo 'usage: make record RUN=<run id> [MARGIN=10m]' >&2; exit 2; }
+	@$(RECORDING) save $(RUN) $(if $(MARGIN),--margin $(MARGIN))
+
+load-recording: ## Load a recording into its own ClickHouse database: make load-recording REC=recordings/<run id> [DB=name]
+	@test -n "$(REC)" || { echo 'usage: make load-recording REC=recordings/<run id> [DB=name]' >&2; exit 2; }
+	@$(RECORDING) load $(REC) $(if $(DB),--database $(DB))
+
+fetch-recordings: ## Download and unpack the recordings listed in bench/recordings.sha256 into recordings/
+	@mkdir -p recordings
+	@while read -r sum file; do \
+	  test -f "recordings/$$file" || curl -fsSL -o "recordings/$$file" "$(RECORDINGS_URL)/$$file" || exit 1; \
+	done < bench/recordings.sha256
+	@cd recordings && sha256sum --check --strict --quiet ../bench/recordings.sha256
+	@while read -r sum file; do \
+	  test -d "recordings/$${file%.tar}" || tar -xf "recordings/$$file" -C recordings || exit 1; \
+	done < bench/recordings.sha256
+
+check-recordings: fetch-recordings ## Load every listed recording into ClickHouse (replacing it) and check rows and checksums
+	@while read -r sum file; do \
+	  $(RECORDING) load "recordings/$${file%.tar}" --replace < /dev/null || exit 1; \
+	done < bench/recordings.sha256
+
 ## Setup
 
 .PHONY: setup
