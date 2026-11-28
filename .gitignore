@@ -46,3 +46,6 @@ npm-debug.log*
 
 # Scenario runs, written by incidentlens scenario run
 /runs/
+
+# Recorded runs, written by incidentlens recording save and make fetch-recordings
+/recordings/

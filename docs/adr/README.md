@@ -11,5 +11,6 @@ Short records of decisions that would be costly to undo. One file per decision, 
 | [0005](0005-change-events.md) | Change event format and the `changes` table | Accepted |
 | [0006](0006-scenario-runs.md) | Scenario runs and the run manifest | Accepted |
 | [0007](0007-deploys-in-scenario-runs.md) | Deploys in scenario runs | Accepted |
+| [0008](0008-recorded-runs.md) | Recorded runs: format, contents and where they live | Accepted |
 
 Template: [`template.md`](template.md)

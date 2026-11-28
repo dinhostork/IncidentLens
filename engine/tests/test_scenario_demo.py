@@ -251,6 +251,17 @@ def test_stack_check_environment_must_agree(tmp_path: Path) -> None:
 COMPOSE = ["docker", "compose", "-f"]
 
 
+def test_stack_image(tmp_path: Path) -> None:
+    docker = healthy_docker()
+    row = json.loads(docker.rows[1])
+    row["Image"] = "otel/opentelemetry-collector-contrib:0.165.0"
+    docker.rows[1] = json.dumps(row)
+    stack = demo.ComposeStack(tmp_path, run=docker)
+    assert stack.image(row["Service"]) == "otel/opentelemetry-collector-contrib:0.165.0"
+    with pytest.raises(ScenarioError, match="nope is not created"):
+        stack.image("nope")
+
+
 def test_stack_stop(tmp_path: Path) -> None:
     docker = healthy_docker()
     demo.ComposeStack(tmp_path, run=docker).stop("payments")
