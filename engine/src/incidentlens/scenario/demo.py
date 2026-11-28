@@ -1,6 +1,7 @@
 """The real flags, changes API, stack and clock behind a scenario run."""
 
 import json
+import os
 import subprocess
 import time
 import urllib.error
@@ -147,17 +148,36 @@ class ChangesClient:
         raise AssertionError("unreachable")
 
 
-Command = Callable[[list[str]], str]
+# Runs a command with extra environment variables and returns its stdout.
+Command = Callable[..., str]
 
 
-def _run(args: list[str]) -> str:
+def _run(args: list[str], env: Mapping[str, str] | None = None) -> str:
     try:
-        out = subprocess.run(args, capture_output=True, text=True, check=True)
+        out = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, **env} if env else None,
+        )
     except FileNotFoundError as e:
         raise ScenarioError(f"{args[0]} not found") from e
     except subprocess.CalledProcessError as e:
-        raise ScenarioError(f"{' '.join(args[:3])} failed: {e.stderr.strip()}") from e
+        raise ScenarioError(f"{' '.join(_short(args))} failed: {e.stderr.strip()}") from e
     return out.stdout
+
+
+def _short(args: list[str]) -> list[str]:
+    """The command without compose's -f <file>, for error messages."""
+    if args[:2] == ["docker", "compose"] and args[2:3] == ["-f"]:
+        return [*args[:2], *args[4:]]
+    return args[:3]
+
+
+# How long docker compose up waits for a restarted service to be healthy. The
+# demo services take a few seconds; the health check gives up after 20 tries.
+DEPLOY_TIMEOUT = 120
 
 
 class ComposeStack:
@@ -167,11 +187,47 @@ class ComposeStack:
         self._compose = ["docker", "compose", "-f", str(root / "deploy/compose/compose.yaml")]
         self._run = run
 
-    def check(self) -> StackInfo:
-        out = self._run([*self._compose, "ps", "--all", "--format", "json"]).strip()
+    def _ps(self, *services: str) -> dict[str, dict]:
+        out = self._run([*self._compose, "ps", "--all", "--format", "json", *services]).strip()
         # Compose prints one object per line; older versions printed one array.
         rows = json.loads(out) if out.startswith("[") else [json.loads(x) for x in out.splitlines()]
-        by_service = {row["Service"]: row for row in rows}
+        return {row["Service"]: row for row in rows}
+
+    def _env(self, by_service: Mapping[str, dict], services: tuple[str, ...]) -> dict:
+        ids = [by_service[s]["ID"] for s in services]
+        env = {}
+        for c in json.loads(self._run(["docker", "inspect", *ids])):
+            service = c["Config"]["Labels"]["com.docker.compose.service"]
+            env[service] = dict(e.split("=", 1) for e in c["Config"].get("Env") or [])
+        return env
+
+    def stop(self, service: str) -> None:
+        try:
+            self._run([*self._compose, "stop", service])
+        except ScenarioError as e:
+            raise RunError(str(e)) from e
+
+    def deploy(self, service: str, version: str) -> None:
+        """Recreate the service with <SERVICE>_VERSION=version, the variable compose.yaml reads.
+
+        Only that service is touched: no dependencies are started and nothing
+        is built. Compose recreates the container because its environment
+        changed, or just starts it when it was stopped with the same version.
+        """
+        up = ["up", "-d", "--wait", "--wait-timeout", str(DEPLOY_TIMEOUT), "--no-deps"]
+        try:
+            self._run(
+                [*self._compose, *up, "--no-build", service],
+                env={f"{service.upper()}_VERSION": version},
+            )
+            running = self._env(self._ps(service), (service,))[service].get("SERVICE_VERSION")
+        except ScenarioError as e:
+            raise RunError(str(e)) from e
+        if running != version:
+            raise RunError(f"{service} came up as {running}, not {version}")
+
+    def check(self) -> StackInfo:
+        by_service = self._ps()
 
         problems = []
         for s in STACK_SERVICES:
@@ -185,11 +241,7 @@ class ComposeStack:
         if problems:
             raise ScenarioError(f"the stack is not ready ({', '.join(problems)}); run make up")
 
-        ids = [by_service[s]["ID"] for s in (*DEMO_SERVICES, "loadgen")]
-        env = {}
-        for c in json.loads(self._run(["docker", "inspect", *ids])):
-            service = c["Config"]["Labels"]["com.docker.compose.service"]
-            env[service] = dict(e.split("=", 1) for e in c["Config"].get("Env") or [])
+        env = self._env(by_service, (*DEMO_SERVICES, "loadgen"))
 
         environments = {_environment(env[s]) for s in DEMO_SERVICES}
         if len(environments) != 1 or None in environments:

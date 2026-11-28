@@ -70,6 +70,14 @@ class Stack(Protocol):
         """Raise ScenarioError unless the stack is up and the load generator is running."""
         ...
 
+    def stop(self, service: str) -> None:
+        """Stop a demo service and return once its container has exited. Raises RunError."""
+        ...
+
+    def deploy(self, service: str, version: str) -> None:
+        """Start a demo service as `version` and return once it is healthy. Raises RunError."""
+        ...
+
 
 @dataclass
 class Result:
@@ -86,6 +94,8 @@ class _Run:
     steps: list[dict[str, str]] = field(default_factory=list)
     times: dict[str, datetime] = field(default_factory=dict)
     change_events: list[str] = field(default_factory=list)
+    # Set before the old version is stopped: from then on cleanup must put it back.
+    deployed: bool = False
 
     def mark(self, step: str) -> datetime:
         t = self.clock.now()
@@ -126,22 +136,30 @@ def run(
 ) -> Result:
     """Run a scenario: the steps in bench/README.md, then clear every flag.
 
-    Refuses with ScenarioError, before changing anything, when the scenario
-    needs a deploy, the stack is not ready or a flag is already on. Once a flag
-    has been set, every way out (normal end, Ctrl-C, an error) clears all
-    flags and writes the manifest. Ctrl-C returns a Result with status
+    Refuses with ScenarioError, before changing anything, when the stack is
+    not ready, a flag is already on or the service to deploy already runs the
+    new version. Once a flag has been set, every way out (normal end, Ctrl-C,
+    an error) clears all flags, puts a deployed service back on its old
+    version and writes the manifest. Ctrl-C returns a Result with status
     interrupted; any other error is raised again after cleanup.
     """
     overrides = dict(overrides or {})
     warmup = overrides.get("warmup", scenario.warmup)
     duration = overrides.get("duration", scenario.duration)
 
-    if scenario.deploy is not None:
-        raise ScenarioError(
-            f"{scenario.id} restarts {scenario.deploy['service']} with a new version, "
-            "and the runner does not do deploys yet (#27)"
-        )
     info = stack.check()
+    deploy = None
+    if scenario.deploy is not None:
+        service, to = scenario.deploy["service"], scenario.deploy["version"]
+        if service not in info.versions:
+            raise ScenarioError(f"{service} is not a demo service")
+        old = info.versions[service]
+        if old == to:
+            raise ScenarioError(
+                f"{service} already runs {to}, maybe left over from a killed run. "
+                "Put it back with make up"
+            )
+        deploy = {"service": service, "version": {"from": old, "to": to}}
     already = flags.on()
     if already:
         raise ScenarioError(
@@ -173,6 +191,7 @@ def run(
             "steps": r.steps,
             "flags": {"baseline": scenario.baseline, "fault": scenario.fault},
             "change_events": r.change_events,
+            "deploy": deploy,
             "expected": scenario.expected,
             "load": info.load,
             "versions": info.versions,
@@ -194,33 +213,13 @@ def run(
         log(f"warmup {format_duration(warmup)}, fault at {iso(warmup_started + _s(warmup))}")
         r.sleep_until(warmup_started + _s(warmup))
 
-        flags.set(scenario.fault)
-        fault_set = r.mark("fault_set")
-        log(f"fault flags set: {_show(scenario.fault)}")
-        if scenario.change_event == "flag":
-            for key, value in scenario.fault.items():
-                event = {
-                    "id": f"{run_id}.{key}",
-                    "time": iso(fault_set),
-                    "kind": "flag",
-                    "environment": info.environment,
-                    # Demo flag keys start with the one service that reads them.
-                    "service": key.split(".")[0],
-                    "attributes": {
-                        "flag.key": key,
-                        "flag.value.from": flag_text(scenario.baseline.get(key, flags.off(key))),
-                        "flag.value.to": flag_text(value),
-                    },
-                    "source": SOURCE,
-                }
-                r.change_events.append(changes.post(event))
-            r.mark("change_events_posted")
-            log(f"change events posted: {', '.join(r.change_events)}")
-        flags.wait(fault_state)
-        r.mark("fault_applied")
+        if deploy is not None:
+            fault_started = _roll_out(r, deploy, flags, changes, stack, fault_state, run_id, info)
+        else:
+            fault_started = _set_fault(r, flags, changes, fault_state, run_id, info)
 
-        log(f"holding {format_duration(duration)}, until {iso(fault_set + _s(duration))}")
-        r.sleep_until(fault_set + _s(duration))
+        log(f"holding {format_duration(duration)}, until {iso(fault_started + _s(duration))}")
+        r.sleep_until(fault_started + _s(duration))
     except KeyboardInterrupt:
         status = "interrupted"
         log("interrupted")
@@ -228,7 +227,7 @@ def run(
         status, error, raised = "failed", str(e), e
         log(f"failed: {e}")
     finally:
-        if "fault_set" in r.times:
+        if "fault_set" in r.times or "deploy_started" in r.times:
             # The window ends when the fault is taken away, whatever the reason.
             r.mark("fault_ended")
         cleared = _clear(flags, r)
@@ -237,15 +236,134 @@ def run(
         _write(run_dir / "manifest.json", manifest(status, error))
         if cleared:
             _confirm_off(flags, r, fault_state)
+        rolled_back = True
+        if r.deployed and deploy is not None:
+            rolled_back = _roll_back(stack, r, deploy["service"], deploy["version"]["from"])
 
     m = manifest(status, error)
     _write(run_dir / "manifest.json", m)
     log(f"manifest: {run_dir / 'manifest.json'}")
     if not cleared:
         raise RunError("could not clear the flags; run make fault-clear and check make faults")
+    if not rolled_back and deploy is not None:
+        service, old = deploy["service"], deploy["version"]["from"]
+        raise RunError(
+            f"could not put {service} back on {old}; run "
+            f"{service.upper()}_VERSION={old} docker compose -f deploy/compose/compose.yaml "
+            f"up -d --wait --no-deps {service}"
+        )
     if raised is not None:
         raise RunError(str(raised)) from raised
     return Result(status, run_dir, m)
+
+
+def _set_fault(
+    r: _Run,
+    flags: Flags,
+    changes: Changes,
+    fault_state: Mapping[str, Any],
+    run_id: str,
+    info: StackInfo,
+) -> datetime:
+    """Set the fault flags and post flag change events. Returns when the fault started."""
+    scenario = r.scenario
+    flags.set(scenario.fault)
+    fault_set = r.mark("fault_set")
+    r.log(f"fault flags set: {_show(scenario.fault)}")
+    if scenario.change_event == "flag":
+        for key, value in scenario.fault.items():
+            event = {
+                "id": f"{run_id}.{key}",
+                "time": iso(fault_set),
+                "kind": "flag",
+                "environment": info.environment,
+                # Demo flag keys start with the one service that reads them.
+                "service": key.split(".")[0],
+                "attributes": {
+                    "flag.key": key,
+                    "flag.value.from": flag_text(scenario.baseline.get(key, flags.off(key))),
+                    "flag.value.to": flag_text(value),
+                },
+                "source": SOURCE,
+            }
+            r.change_events.append(changes.post(event))
+        r.mark("change_events_posted")
+        r.log(f"change events posted: {', '.join(r.change_events)}")
+    flags.wait(fault_state)
+    r.mark("fault_applied")
+    return fault_set
+
+
+def _roll_out(
+    r: _Run,
+    deploy: Mapping[str, Any],
+    flags: Flags,
+    changes: Changes,
+    stack: Stack,
+    fault_state: Mapping[str, Any],
+    run_id: str,
+    info: StackInfo,
+) -> datetime:
+    """Replace the service with the new version, which has the fault flags' bug from the start.
+
+    The flags go on while neither version runs: after the old container has
+    exited and before the new one starts. The demo runs one container per
+    service, so no span of the old version can show the bug (ADR 0007).
+    Returns when the rollout started, which is also when the fault started.
+    """
+    service, old, new = deploy["service"], deploy["version"]["from"], deploy["version"]["to"]
+    started = r.mark("deploy_started")
+    r.log(f"deploying {service} {new} (from {old})")
+    if r.scenario.change_event == "deploy":
+        # Timed at the start of the rollout, the way a CI job posts it.
+        event = {
+            "id": f"{run_id}.deploy",
+            "time": iso(started),
+            "kind": "deploy",
+            "environment": info.environment,
+            "service": service,
+            "attributes": {"version.from": old, "version.to": new},
+            "source": SOURCE,
+        }
+        r.change_events.append(changes.post(event))
+        r.mark("change_events_posted")
+        r.log(f"change event posted: {r.change_events[-1]}")
+
+    r.deployed = True
+    stack.stop(service)
+    r.mark("old_version_stopped")
+    r.log(f"{service} {old} stopped")
+    if r.scenario.fault:
+        flags.set(r.scenario.fault)
+        r.mark("fault_set")
+        r.log(f"fault flags set: {_show(r.scenario.fault)}")
+        flags.wait(fault_state)
+        r.mark("fault_applied")
+    stack.deploy(service, new)
+    r.mark("new_version_healthy")
+    r.log(f"{service} {new} healthy")
+    return started
+
+
+def _roll_back(stack: Stack, r: _Run, service: str, version: str) -> bool:
+    """Put the service back on its old version, ignoring Ctrl-C until it is done."""
+    r.mark("rollback_started")
+    r.log(f"putting {service} back on {version}")
+    for attempt in range(3):
+        try:
+            stack.deploy(service, version)
+            break
+        except KeyboardInterrupt:
+            r.log(f"putting {service} back on {version} first")
+        except Exception as e:
+            r.log(f"putting {service} back on {version} failed: {e}")
+            if attempt == 2:
+                return False
+    else:
+        return False
+    r.mark("rollback_healthy")
+    r.log(f"{service} {version} healthy")
+    return True
 
 
 def _clear(flags: Flags, r: _Run) -> bool:

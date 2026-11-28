@@ -144,15 +144,32 @@ ATTRS = "deployment.environment.name=demo,service.namespace=shop"
 
 
 class Docker:
+    """docker compose ps and up, and docker inspect. up sets SERVICE_VERSION from the env."""
+
     def __init__(self, rows: list[str], env: dict[str, dict[str, str]]) -> None:
         self.rows = rows
         self.env = env
         self.calls: list[list[str]] = []
+        self.call_env: list[dict[str, str] | None] = []
+        self.up_fails = False
 
-    def __call__(self, args: list[str]) -> str:
+    def __call__(self, args: list[str], env: dict[str, str] | None = None) -> str:
         self.calls.append(args)
+        self.call_env.append(env)
         if args[:2] == ["docker", "compose"]:
-            return "\n".join(self.rows) + "\n"
+            verb, rest = args[4], args[5:]
+            if verb == "ps":
+                services = rest[3:]
+                rows = [
+                    r for r in self.rows if not services or json.loads(r)["Service"] in services
+                ]
+                return "\n".join(rows) + "\n"
+            if verb == "up":
+                if self.up_fails:
+                    raise ScenarioError("docker compose up failed: payments is unhealthy")
+                service = rest[-1]
+                self.env[service]["SERVICE_VERSION"] = (env or {})[f"{service.upper()}_VERSION"]
+            return ""
         assert args[:2] == ["docker", "inspect"]
         return json.dumps(
             [inspect(i.removeprefix("id-"), self.env[i.removeprefix("id-")]) for i in args[2:]]
@@ -229,6 +246,70 @@ def test_stack_check_environment_must_agree(tmp_path: Path) -> None:
     docker = healthy_docker(catalog={"OTEL_RESOURCE_ATTRIBUTES": "service.namespace=shop"})
     with pytest.raises(ScenarioError, match="catalog=None"):
         demo.ComposeStack(tmp_path, run=docker).check()
+
+
+COMPOSE = ["docker", "compose", "-f"]
+
+
+def test_stack_stop(tmp_path: Path) -> None:
+    docker = healthy_docker()
+    demo.ComposeStack(tmp_path, run=docker).stop("payments")
+    assert docker.calls == [
+        [*COMPOSE, str(tmp_path / "deploy/compose/compose.yaml"), "stop", "payments"]
+    ]
+
+
+def test_stack_deploy(tmp_path: Path) -> None:
+    docker = healthy_docker()
+    demo.ComposeStack(tmp_path, run=docker).deploy("payments", "1.0.1")
+    compose = [*COMPOSE, str(tmp_path / "deploy/compose/compose.yaml")]
+    # Only payments: its dependencies are left alone and nothing is built.
+    assert docker.calls[0] == [
+        *compose, "up", "-d", "--wait", "--wait-timeout", "120", "--no-deps", "--no-build",
+        "payments",
+    ]  # fmt: skip
+    assert docker.call_env[0] == {"PAYMENTS_VERSION": "1.0.1"}
+    # Then reads back the version the new container runs.
+    assert docker.calls[1] == [*compose, "ps", "--all", "--format", "json", "payments"]
+    assert docker.calls[2] == ["docker", "inspect", "id-payments"]
+
+
+def test_stack_deploy_checks_the_version(tmp_path: Path) -> None:
+    docker = healthy_docker()
+
+    def up_ignores_env(args: list[str], env: dict[str, str] | None = None) -> str:
+        return Docker.__call__(docker, args, {"PAYMENTS_VERSION": "1.0.0"} if env else None)
+
+    with pytest.raises(RunError, match="payments came up as 1.0.0, not 1.0.1"):
+        demo.ComposeStack(tmp_path, run=up_ignores_env).deploy("payments", "1.0.1")
+
+
+def test_stack_deploy_failure_is_a_run_error(tmp_path: Path) -> None:
+    docker = healthy_docker()
+    docker.up_fails = True
+    with pytest.raises(RunError, match="payments is unhealthy"):
+        demo.ComposeStack(tmp_path, run=docker).deploy("payments", "1.0.1")
+
+
+def test_run_passes_extra_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("INCIDENTLENS_TEST_KEEP", "kept")
+    out = demo._run(
+        ["sh", "-c", 'echo "$INCIDENTLENS_TEST_KEEP $PAYMENTS_VERSION"'],
+        env={"PAYMENTS_VERSION": "1.0.1"},
+    )
+    assert out == "kept 1.0.1\n"
+
+
+def test_run_error_names_the_command() -> None:
+    with pytest.raises(ScenarioError, match=r"^sh -c echo no >&2; exit 1 failed: no$"):
+        demo._run(["sh", "-c", "echo no >&2; exit 1"])
+    # Compose commands are named without the -f <file> in front.
+    assert demo._short([*COMPOSE, "/x/compose.yaml", "stop", "payments"]) == [
+        "docker",
+        "compose",
+        "stop",
+        "payments",
+    ]
 
 
 def test_git_info(tmp_path: Path) -> None:

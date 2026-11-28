@@ -10,5 +10,6 @@ Short records of decisions that would be costly to undo. One file per decision, 
 | [0004](0004-scenario-format.md) | Scenario format and ground truth | Accepted |
 | [0005](0005-change-events.md) | Change event format and the `changes` table | Accepted |
 | [0006](0006-scenario-runs.md) | Scenario runs and the run manifest | Accepted |
+| [0007](0007-deploys-in-scenario-runs.md) | Deploys in scenario runs | Accepted |
 
 Template: [`template.md`](template.md)

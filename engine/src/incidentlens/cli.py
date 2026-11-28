@@ -26,8 +26,9 @@ def build_parser() -> argparse.ArgumentParser:
         "run",
         help="run a scenario from bench/scenarios/ and write its manifest under runs/",
         description=(
-            "Run a scenario on the stack started by make up: baseline flags, warmup, fault, "
-            "change events, hold, then clear every flag. Writes runs/<id>-<time>/manifest.json. "
+            "Run a scenario on the stack started by make up: baseline flags, warmup, fault "
+            "(and deploy), change events, hold, then clear every flag and put back the old "
+            "version. Writes runs/<id>-<time>/manifest.json. "
             "Environment: CHANGES_URL (default http://127.0.0.1:8090), CHANGES_TOKEN, "
             "FLAGD_OFREP_URL (default http://127.0.0.1:8016)."
         ),

@@ -97,7 +97,7 @@ Each service reads `SERVICE_VERSION` at startup. The compose file takes it from 
 PAYMENTS_VERSION=1.0.1 docker compose -f deploy/compose/compose.yaml up -d --wait payments
 ```
 
-New spans from payments then carry `service.version=1.0.1`. Changing behavior together with the version is the scenario runner's job ([#27](https://github.com/dinhostork/IncidentLens/issues/27)).
+New spans from payments then carry `service.version=1.0.1`. Changing behavior together with the version is the scenario runner's job: `make scenario ID=payments-bad-deploy` does both and puts 1.0.0 back afterwards ([Running a scenario](../bench/README.md#running-a-scenario)).
 
 ## Faults
 
@@ -157,7 +157,7 @@ Every inbound request and outbound call passes through one hook before it runs:
 
 The providers run flagd's in-process resolver: they sync the flag definitions from flagd (`FLAGD_HOST`, port 8015) and evaluate locally. An evaluation never waits on the network, flags read as off until the first sync, and if flagd goes away the last synced values stay in effect until it is back.
 
-"Bad deploy" faults, where `SERVICE_VERSION` and behavior change together, belong to the scenario runner (Phase 1).
+"Bad deploy" faults, where `SERVICE_VERSION` and behavior change together, are done by the scenario runner with these same flags, see [ADR 0007](../docs/adr/0007-deploys-in-scenario-runs.md).
 
 ## Layout
 

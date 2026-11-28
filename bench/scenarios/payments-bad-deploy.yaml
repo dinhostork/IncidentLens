@@ -8,8 +8,8 @@ fault:
   deploy:
     service: payments
     version: 1.0.1
-  # What 1.0.1 does wrong. Set once the new version is up, never recorded as a
-  # flag change.
+  # What 1.0.1 does wrong. Set after 1.0.0 stops and before 1.0.1 starts,
+  # never recorded as a flag change.
   flags:
     payments.error_rate: 0.25
   duration: 10m
